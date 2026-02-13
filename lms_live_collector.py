@@ -10740,7 +10740,7 @@ def main() -> None:
                             elif hp_source_raw in ("vision", "heur", "heuristic"):
                                 hp_src = "heur"
                                 hp_conf = 0.65
-                            elif hp_source_raw in ("fallback", "derived_from_damage_taken", "death_fallback"):
+                            elif hp_source_raw in ("fallback", "derived_from_damage_taken", "death_fallback", "none", ""):
                                 hp_src = "fallback"
                                 hp_conf = 0.35
                             else:
