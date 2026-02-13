@@ -90,6 +90,19 @@ except Exception:  # pragma: no cover
     live_event_to_features = None
     FactorizedPolicyValueNet = None
 
+try:
+    from botgame.telemetry import (
+        EntityTrack as LiveTelemetryEntityTrack,
+        JsonlTelemetryWriter,
+        TelemetryFrame as LiveTelemetryFrame,
+        TelemetryWriterConfig,
+    )
+except Exception:  # pragma: no cover
+    LiveTelemetryEntityTrack = None
+    JsonlTelemetryWriter = None
+    LiveTelemetryFrame = None
+    TelemetryWriterConfig = None
+
 
 BOT_MARKERS = ("bot", "npc", "ai", "cpu")
 PLAYER_KEY_HINTS = ("player", "user", "username", "nickname", "display")
@@ -2292,6 +2305,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=140,
         help="Maximo de globals candidatos que se guardan por snapshot runtime.",
     )
+    parser.add_argument(
+        "--telemetry-jsonl",
+        default="",
+        help="Ruta JSONL para telemetria de runtime en vivo (opcional).",
+    )
+    parser.add_argument(
+        "--telemetry-rate-hz",
+        type=float,
+        default=10.0,
+        help="Frecuencia maxima de emision de telemetria de runtime (Hz).",
+    )
     return parser
 
 
@@ -2450,6 +2474,34 @@ def main() -> None:
         "ocr_saved": 0,
         "ocr_errors": 0,
     }
+    telemetry_writer = None
+    telemetry_run_id = ""
+    telemetry_match_id = ""
+    telemetry_jsonl_path = str(getattr(args, "telemetry_jsonl", "") or "").strip()
+    if telemetry_jsonl_path:
+        if JsonlTelemetryWriter is None or TelemetryWriterConfig is None:
+            print(
+                "[BOT][TELEMETRY][WARN] No se pudo iniciar telemetry writer: "
+                "botgame.telemetry no importable."
+            )
+        else:
+            try:
+                telemetry_writer = JsonlTelemetryWriter(
+                    TelemetryWriterConfig(
+                        path=telemetry_jsonl_path,
+                        rate_hz=max(0.5, float(getattr(args, "telemetry_rate_hz", 10.0) or 10.0)),
+                        flush_every_s=0.5,
+                        queue_max=256,
+                        enabled=True,
+                    )
+                ).start()
+                print(
+                    "[BOT][TELEMETRY] JSONL activo en "
+                    f"{telemetry_jsonl_path} rate_hz={float(getattr(args, 'telemetry_rate_hz', 10.0) or 10.0):.2f}"
+                )
+            except Exception as exc:
+                telemetry_writer = None
+                print(f"[BOT][TELEMETRY][WARN] No se pudo iniciar writer JSONL: {exc}")
     ws_keywords = parse_keyword_csv(args.ws_keywords)
     ws_url_by_request_id: Dict[str, str] = {}
     ws_pending_writes = 0
@@ -8476,6 +8528,12 @@ def main() -> None:
                     mode="play_runtime",
                     explicit_jsonl=args.bot_feedback_jsonl,
                 )
+                if telemetry_writer is not None:
+                    try:
+                        run_dir_obj = runtime_feedback_session.get("run_dir") if runtime_feedback_session else None
+                        telemetry_match_id = str(getattr(run_dir_obj, "name", "") or "")
+                    except Exception:
+                        telemetry_match_id = ""
                 feedback_screenshot_interval_sec = max(
                     0.0,
                     float(args.bot_feedback_screenshot_every_sec or 0.0),
@@ -8584,6 +8642,8 @@ def main() -> None:
                 last_play_target_scan_at = 0.0
                 run_started_at = time.monotonic()
                 knowledge_run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
+                if telemetry_writer is not None:
+                    telemetry_run_id = str(knowledge_run_id)
                 runtime_probe_lobby_done = False
                 runtime_probe_match_done = False
                 runtime_probe_paths: List[str] = []
@@ -10661,6 +10721,104 @@ def main() -> None:
                         if move_motion_score_for_feedback is not None
                         else 0.0
                     )
+                    if telemetry_writer is not None and LiveTelemetryFrame is not None:
+                        try:
+                            hp_ratio = (
+                                (float(health_current_for_feedback) / max(1.0, float(health_max_for_feedback))) * 100.0
+                            )
+                            hp_pct = max(0.0, min(100.0, hp_ratio))
+                            hp_source_raw = str(
+                                tick_telemetry.get("health_source", bot_event_signals.get("health_source", "fallback"))
+                                or "fallback"
+                            ).lower()
+                            if hp_source_raw in ("event", "ws", "bridge"):
+                                hp_src = "ws"
+                                hp_conf = 0.90
+                            elif hp_source_raw in ("ocr",):
+                                hp_src = "ocr"
+                                hp_conf = 0.80
+                            elif hp_source_raw in ("vision", "heur", "heuristic"):
+                                hp_src = "heur"
+                                hp_conf = 0.65
+                            elif hp_source_raw in ("fallback", "derived_from_damage_taken", "death_fallback"):
+                                hp_src = "fallback"
+                                hp_conf = 0.35
+                            else:
+                                hp_src = "unknown"
+                                hp_conf = 0.20
+
+                            mana_now = float(ability_state.get("mana", 0.0) or 0.0)
+                            max_mana = max(1.0, float(ability_state.get("max_mana", 100.0) or 100.0))
+                            stamina_pct = max(0.0, min(100.0, (mana_now / max_mana) * 100.0))
+
+                            enemy_visible_now = bool(
+                                enemy_for_feedback.get("recent", enemy_for_feedback.get("detected", False))
+                            )
+                            enemy_conf_now = max(0.0, min(1.0, float(enemy_for_feedback.get("confidence", 0.0) or 0.0)))
+                            enemy_x = float(enemy_for_feedback.get("x_ratio", 0.5) or 0.5)
+                            enemy_y = float(enemy_for_feedback.get("y_ratio", 0.5) or 0.5)
+                            enemy_xy = (enemy_x, enemy_y) if enemy_visible_now else None
+
+                            entities_payload: List[Any] = []
+                            enemy_guardian_name = str(bot_event_signals.get("enemy_guardian", "") or "").strip()
+                            own_guardian_name = str(bot_event_signals.get("own_guardian", "") or "").strip()
+                            if LiveTelemetryEntityTrack is not None and enemy_guardian_name:
+                                entities_payload.append(
+                                    LiveTelemetryEntityTrack(
+                                        name=enemy_guardian_name,
+                                        kind="player",
+                                        hp_pct=None,
+                                        conf=enemy_conf_now,
+                                    )
+                                )
+                            if LiveTelemetryEntityTrack is not None and own_guardian_name:
+                                entities_payload.append(
+                                    LiveTelemetryEntityTrack(
+                                        name=own_guardian_name,
+                                        kind="player",
+                                        hp_pct=hp_pct,
+                                        conf=max(0.5, hp_conf),
+                                    )
+                                )
+
+                            telemetry_writer.maybe_emit(
+                                LiveTelemetryFrame(
+                                    ts_ms=int(time.time() * 1000),
+                                    run_id=str(telemetry_run_id or ""),
+                                    match_id=str(telemetry_match_id or ""),
+                                    hp_pct=hp_pct,
+                                    hp_conf=hp_conf,
+                                    hp_src=hp_src,
+                                    stamina_pct=stamina_pct,
+                                    stamina_conf=0.60,
+                                    stamina_src="heur",
+                                    dmg_in_total=current_damage_taken_total,
+                                    dmg_out_total=current_damage_done_total,
+                                    dmg_in_tick=max(0.0, float(damage_taken_delta)),
+                                    dmg_out_tick=max(0.0, float(damage_done_delta)),
+                                    enemy_visible=enemy_visible_now,
+                                    enemy_conf=enemy_conf_now,
+                                    enemy_dir_deg=None,
+                                    enemy_xy=enemy_xy,
+                                    zone_outside=bool(bot_event_signals.get("zone_outside_safe", False)),
+                                    zone_toxic=bool(bot_event_signals.get("zone_toxic_detected", False)),
+                                    zone_countdown_s=(
+                                        None
+                                        if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0.0
+                                        else float(bot_event_signals.get("zone_countdown_sec", 0.0) or 0.0)
+                                    ),
+                                    decision=str(bot_state or ""),
+                                    action_last=str(last_action_label or ""),
+                                    action_ok=(None if last_action_ok is None else bool(last_action_ok)),
+                                    motion_score=float(motion_eval),
+                                    stuck=bool(move_stuck_now),
+                                    collision_proxy=bool(move_stuck_now),
+                                    entities=entities_payload,
+                                )
+                            )
+                        except Exception as exc:
+                            if int(time.time()) % 20 == 0:
+                                print(f"[BOT][TELEMETRY][WARN] emit fallo: {exc}")
                     reward_now = (
                         (damage_done_delta * 0.16)
                         - (damage_taken_delta * 0.20)
@@ -11330,6 +11488,11 @@ def main() -> None:
             print("\nActividad de ronda (fallback):")
             print_round_activity_report(conn, limit=args.report_limit)
     finally:
+        try:
+            if telemetry_writer is not None:
+                telemetry_writer.close()
+        except Exception:
+            pass
         try:
             drain_ocr_queue(page_obj=page, force=True)
         except Exception:
