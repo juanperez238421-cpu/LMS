@@ -8655,6 +8655,8 @@ def main() -> None:
                 knowledge_zone_observed_steps = 0
                 knowledge_prev_damage_done = float(bot_event_signals.get("damage_done_total", 0.0) or 0.0)
                 knowledge_prev_damage_taken = float(bot_event_signals.get("damage_taken_total", 0.0) or 0.0)
+                telemetry_prev_click_count = 0
+                telemetry_damage_out_proxy_total = 0.0
                 telemetry_monitor = create_runtime_telemetry_monitor()
                 last_tick_telemetry: Optional[Dict[str, Any]] = None
                 knowledge_prev_move_action = ""
@@ -10723,6 +10725,10 @@ def main() -> None:
                     )
                     if telemetry_writer is not None and LiveTelemetryFrame is not None:
                         try:
+                            click_count_now = int(post_click_probe.get("click0", 0) or 0)
+                            click_count_delta = max(0, click_count_now - int(telemetry_prev_click_count))
+                            telemetry_prev_click_count = click_count_now
+
                             hp_ratio = (
                                 (float(health_current_for_feedback) / max(1.0, float(health_max_for_feedback))) * 100.0
                             )
@@ -10740,12 +10746,21 @@ def main() -> None:
                             elif hp_source_raw in ("vision", "heur", "heuristic"):
                                 hp_src = "heur"
                                 hp_conf = 0.65
-                            elif hp_source_raw in ("fallback", "derived_from_damage_taken", "death_fallback", "none", ""):
+                            elif hp_source_raw in (
+                                "fallback",
+                                "derived_from_damage_taken",
+                                "death_fallback",
+                                "default_assumed_full",
+                                "carry_forward",
+                                "signal",
+                                "none",
+                                "",
+                            ):
                                 hp_src = "fallback"
                                 hp_conf = 0.35
                             else:
-                                hp_src = "unknown"
-                                hp_conf = 0.20
+                                hp_src = "fallback"
+                                hp_conf = 0.30
 
                             mana_now = float(ability_state.get("mana", 0.0) or 0.0)
                             max_mana = max(1.0, float(ability_state.get("max_mana", 100.0) or 100.0))
@@ -10758,6 +10773,34 @@ def main() -> None:
                             enemy_x = float(enemy_for_feedback.get("x_ratio", 0.5) or 0.5)
                             enemy_y = float(enemy_for_feedback.get("y_ratio", 0.5) or 0.5)
                             enemy_xy = (enemy_x, enemy_y) if enemy_visible_now else None
+                            attack_label_l = str(last_action_label or "").lower()
+                            attack_evidence = bool(
+                                click_count_delta > 0
+                                and (
+                                    ("attack_click" in attack_label_l)
+                                    or ("attack" in attack_label_l)
+                                    or bool(ability_used_now)
+                                )
+                                and enemy_visible_now
+                                and (enemy_conf_now >= 0.55)
+                            )
+                            proxy_gain = 0.0
+                            if (
+                                attack_evidence
+                                and current_damage_done_total <= 1e-6
+                                and damage_done_delta <= 1e-6
+                            ):
+                                proxy_gain = float(click_count_delta) * max(
+                                    0.2,
+                                    min(4.0, 0.45 + (1.35 * enemy_conf_now)),
+                                )
+                                telemetry_damage_out_proxy_total = float(telemetry_damage_out_proxy_total) + float(proxy_gain)
+
+                            telemetry_dmg_out_total = float(current_damage_done_total)
+                            telemetry_dmg_out_tick = max(0.0, float(damage_done_delta))
+                            if telemetry_dmg_out_total <= 1e-6 and telemetry_damage_out_proxy_total > 0.0:
+                                telemetry_dmg_out_total = float(telemetry_damage_out_proxy_total)
+                                telemetry_dmg_out_tick = max(telemetry_dmg_out_tick, float(proxy_gain))
 
                             entities_payload: List[Any] = []
                             enemy_guardian_name = str(bot_event_signals.get("enemy_guardian", "") or "").strip()
@@ -10793,9 +10836,9 @@ def main() -> None:
                                     stamina_conf=0.60,
                                     stamina_src="heur",
                                     dmg_in_total=current_damage_taken_total,
-                                    dmg_out_total=current_damage_done_total,
+                                    dmg_out_total=telemetry_dmg_out_total,
                                     dmg_in_tick=max(0.0, float(damage_taken_delta)),
-                                    dmg_out_tick=max(0.0, float(damage_done_delta)),
+                                    dmg_out_tick=telemetry_dmg_out_tick,
                                     enemy_visible=enemy_visible_now,
                                     enemy_conf=enemy_conf_now,
                                     enemy_dir_deg=None,
