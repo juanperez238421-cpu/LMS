@@ -81,7 +81,7 @@ function collectRadarTracks(frame) {
 
   const enemyVisible = !!frame.enemy_visible;
   const enemyXY = frame.enemy_xy;
-  if (enemyVisible && Array.isArray(enemyXY) && enemyXY.length === 2) {
+  if (enemyVisible && Array.isArray(enemyXY) && enemyXY.length === 2 && tracks.enemies.length === 0) {
     const x = clamp01(Number(enemyXY[0]));
     const y = clamp01(Number(enemyXY[1]));
     const dx = x - 0.5;

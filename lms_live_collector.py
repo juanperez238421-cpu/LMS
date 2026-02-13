@@ -6043,18 +6043,28 @@ def main() -> None:
         red_ratio_threshold: float,
         min_contour_area: float,
     ) -> Dict[str, Any]:
+        default_payload: Dict[str, Any] = {
+            "detected": False,
+            "confidence": 0.0,
+            "near": False,
+            "x_ratio": 0.5,
+            "y_ratio": 0.5,
+            "direction_key": "KeyW",
+            "dir": "CENTER",
+            "red_ratio": 0.0,
+            "blue_ratio": 0.0,
+            "area_ratio": 0.0,
+            "distance_norm": None,
+            "enemy_count": 0,
+            "ally_count": 0,
+            "targets": [],
+            "allies": [],
+            "self_xy": (0.5, 0.5),
+            "self_hp_pct": None,
+            "self_hp_conf": 0.0,
+        }
         if cv2 is None or np is None:
-            return {
-                "detected": False,
-                "confidence": 0.0,
-                "near": False,
-                "x_ratio": 0.5,
-                "y_ratio": 0.5,
-                "direction_key": "KeyW",
-                "dir": "CENTER",
-                "red_ratio": 0.0,
-                "area_ratio": 0.0,
-            }
+            return dict(default_payload)
         try:
             canvas_rect = frame_obj.evaluate(
                 """
@@ -6087,7 +6097,7 @@ def main() -> None:
             )
             cap_dt_ms = (time.monotonic() - cap_started_at) * 1000.0
             if cap_dt_ms >= 350.0:
-                print(f"[BOT][LATENCY][SLOW] section=play_button_capture dt_ms={cap_dt_ms:.1f}")
+                print(f"[BOT][LATENCY][SLOW] section=enemy_vision_capture dt_ms={cap_dt_ms:.1f}")
             image = cv2.imdecode(np.frombuffer(raw_png, dtype=np.uint8), cv2.IMREAD_COLOR)
             if image is None:
                 raise ValueError("decode_fail")
@@ -6095,65 +6105,423 @@ def main() -> None:
             if h < 20 or w < 20:
                 raise ValueError("small_canvas")
 
-            rx0 = int(w * 0.10)
-            rx1 = int(w * 0.90)
-            ry0 = int(h * 0.15)
-            ry1 = int(h * 0.88)
+            rx0 = int(w * 0.12)
+            rx1 = int(w * 0.88)
+            ry0 = int(h * 0.18)
+            ry1 = int(h * 0.86)
             roi = image[ry0:ry1, rx0:rx1]
             if roi.size == 0:
                 raise ValueError("roi_empty")
 
+            def _estimate_self_hp_from_marker(
+                image_bgr: Any,
+                self_x_ratio: float,
+                self_y_ratio: float,
+            ) -> Tuple[Optional[float], float]:
+                try:
+                    ih, iw = image_bgr.shape[:2]
+                    sx = int(max(0, min(iw - 1, round(float(self_x_ratio) * float(iw)))))
+                    sy = int(max(0, min(ih - 1, round(float(self_y_ratio) * float(ih)))))
+                    x0 = max(0, sx - 58)
+                    x1 = min(iw, sx + 58)
+                    y0 = max(0, sy - 84)
+                    y1 = max(0, min(ih, sy - 16))
+                    if (x1 - x0) < 16 or (y1 - y0) < 8:
+                        return None, 0.0
+
+                    hp_roi = image_bgr[y0:y1, x0:x1]
+                    if hp_roi is None or hp_roi.size == 0:
+                        return None, 0.0
+
+                    hp_hsv = cv2.cvtColor(hp_roi, cv2.COLOR_BGR2HSV)
+                    hp_warm = cv2.inRange(hp_hsv, (0, 60, 65), (35, 255, 255))
+                    hp_green = cv2.inRange(hp_hsv, (36, 45, 65), (95, 255, 255))
+                    hp_mask = cv2.bitwise_or(hp_warm, hp_green)
+                    hp_kernel = np.ones((2, 2), dtype=np.uint8)
+                    hp_mask = cv2.morphologyEx(hp_mask, cv2.MORPH_OPEN, hp_kernel)
+                    hp_mask = cv2.morphologyEx(hp_mask, cv2.MORPH_CLOSE, hp_kernel)
+
+                    best_len = 0
+                    best_row = -1
+                    best_start = 0
+                    best_end = 0
+                    row_limit = max(2, int(hp_mask.shape[0] * 0.78))
+                    for row_idx in range(row_limit):
+                        row = hp_mask[row_idx]
+                        nz = np.flatnonzero(row > 0)
+                        if nz.size == 0:
+                            continue
+                        start = int(nz[0])
+                        prev = int(nz[0])
+                        for val in nz[1:]:
+                            val_i = int(val)
+                            if val_i == (prev + 1):
+                                prev = val_i
+                                continue
+                            run_len = prev - start + 1
+                            if run_len > best_len:
+                                best_len = run_len
+                                best_row = row_idx
+                                best_start = start
+                                best_end = prev
+                            start = val_i
+                            prev = val_i
+                        run_len = prev - start + 1
+                        if run_len > best_len:
+                            best_len = run_len
+                            best_row = row_idx
+                            best_start = start
+                            best_end = prev
+
+                    if best_len < 9 or best_row < 0:
+                        return None, 0.0
+
+                    gray = cv2.cvtColor(hp_roi, cv2.COLOR_BGR2GRAY)
+                    row_gray = gray[best_row]
+                    left = int(best_start)
+                    right = int(best_end)
+                    while left > 1 and int(row_gray[left - 1]) < 95:
+                        left -= 1
+                    while right < (row_gray.shape[0] - 2) and int(row_gray[right + 1]) < 95:
+                        right += 1
+
+                    full_len = max(best_len, right - left + 1)
+                    full_len = int(max(24, min(78, full_len)))
+                    hp_pct = max(0.0, min(100.0, (float(best_len) / float(max(1, full_len))) * 100.0))
+                    hp_conf = max(0.0, min(0.92, 0.22 + (float(best_len) / 68.0)))
+                    return hp_pct, hp_conf
+                except Exception:
+                    return None, 0.0
+
+            def _suppress_ui_regions(mask_img: Any) -> Any:
+                try:
+                    mh, mw = mask_img.shape[:2]
+                    if mh < 8 or mw < 8:
+                        return mask_img
+                    out = mask_img.copy()
+                    # Top strip / HUD header.
+                    out[0:int(mh * 0.06), :] = 0
+                    # Left scoreboard.
+                    out[0:int(mh * 0.34), 0:int(mw * 0.23)] = 0
+                    # Top-right minimap region.
+                    out[0:int(mh * 0.26), int(mw * 0.80):mw] = 0
+                    # Bottom-right joystick/skills cluster.
+                    out[int(mh * 0.70):mh, int(mw * 0.78):mw] = 0
+                    return out
+                except Exception:
+                    return mask_img
+
+            def _is_ignored_overlay_xy(x_ratio: float, y_ratio: float) -> bool:
+                if x_ratio <= 0.24 and y_ratio <= 0.42:
+                    return True
+                if x_ratio >= 0.78 and y_ratio <= 0.28:
+                    return True
+                if x_ratio >= 0.78 and y_ratio >= 0.66:
+                    return True
+                return False
+
+            def _has_health_bar_above(x_ratio: float, y_ratio: float, radius_px: float) -> bool:
+                try:
+                    cx = int(max(0, min(w - 1, round(float(x_ratio) * float(w)))))
+                    cy = int(max(0, min(h - 1, round(float(y_ratio) * float(h)))))
+                    r = int(max(7, min(26, round(float(radius_px)))))
+                    x0 = max(0, cx - int(4.6 * r))
+                    x1 = min(w, cx + int(4.6 * r))
+                    y0 = max(0, cy - int(6.5 * r))
+                    y1 = max(0, min(h, cy - int(1.8 * r)))
+                    if (x1 - x0) < 18 or (y1 - y0) < 6:
+                        return False
+                    bar_roi = image[y0:y1, x0:x1]
+                    if bar_roi is None or bar_roi.size == 0:
+                        return False
+                    hsv_bar = cv2.cvtColor(bar_roi, cv2.COLOR_BGR2HSV)
+                    warm = cv2.inRange(hsv_bar, (0, 55, 62), (35, 255, 255))
+                    green = cv2.inRange(hsv_bar, (36, 45, 62), (95, 255, 255))
+                    bar_mask = cv2.bitwise_or(warm, green)
+                    bar_mask = cv2.morphologyEx(bar_mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8))
+                    min_run = max(10, int(2.1 * r))
+                    row_limit = max(1, int(bar_mask.shape[0] * 0.85))
+                    for row_idx in range(row_limit):
+                        row = bar_mask[row_idx]
+                        nz = np.flatnonzero(row > 0)
+                        if nz.size == 0:
+                            continue
+                        run_start = int(nz[0])
+                        run_prev = int(nz[0])
+                        for px in nz[1:]:
+                            px_i = int(px)
+                            if px_i == (run_prev + 1):
+                                run_prev = px_i
+                                continue
+                            if (run_prev - run_start + 1) >= min_run:
+                                return True
+                            run_start = px_i
+                            run_prev = px_i
+                        if (run_prev - run_start + 1) >= min_run:
+                            return True
+                    return False
+                except Exception:
+                    return False
+
+            def _extract_candidates(mask: Any, roi_area: float) -> List[Dict[str, Any]]:
+                candidates: List[Dict[str, Any]] = []
+                try:
+                    blur = cv2.GaussianBlur(mask, (9, 9), 1.8)
+                    circles = cv2.HoughCircles(
+                        blur,
+                        cv2.HOUGH_GRADIENT,
+                        dp=1.2,
+                        minDist=16,
+                        param1=90,
+                        param2=13,
+                        minRadius=7,
+                        maxRadius=24,
+                    )
+                except Exception:
+                    circles = None
+
+                if circles is not None and len(circles) > 0:
+                    for c in circles[0]:
+                        cx_r = float(c[0])
+                        cy_r = float(c[1])
+                        r = float(c[2])
+                        if r < 7.0 or r > 24.0:
+                            continue
+                        x0 = int(max(0, math.floor(cx_r - (r * 1.4))))
+                        y0 = int(max(0, math.floor(cy_r - (r * 1.4))))
+                        x1 = int(min(mask.shape[1], math.ceil(cx_r + (r * 1.4))))
+                        y1 = int(min(mask.shape[0], math.ceil(cy_r + (r * 1.4))))
+                        if x1 <= x0 or y1 <= y0:
+                            continue
+                        local = mask[y0:y1, x0:x1]
+                        if local.size <= 0:
+                            continue
+                        yy, xx = np.indices(local.shape)
+                        dx = xx.astype(np.float32) - float(cx_r - x0)
+                        dy = yy.astype(np.float32) - float(cy_r - y0)
+                        rr = np.sqrt((dx * dx) + (dy * dy))
+                        ring = (rr >= (0.62 * r)) & (rr <= (1.28 * r))
+                        core = rr <= (0.48 * r)
+                        ring_pixels = int(np.count_nonzero(ring))
+                        core_pixels = int(np.count_nonzero(core))
+                        if ring_pixels <= 0:
+                            continue
+                        ring_hits = int(np.count_nonzero((local > 0) & ring))
+                        ring_ratio = float(ring_hits) / float(max(1, ring_pixels))
+                        core_hits = int(np.count_nonzero((local > 0) & core))
+                        core_ratio = float(core_hits) / float(max(1, core_pixels))
+                        if ring_ratio < 0.19:
+                            continue
+                        if core_ratio > 0.58:
+                            continue
+                        area = float(math.pi * r * r)
+                        area_ratio = float(area / max(1.0, roi_area))
+                        cx = float(rx0 + cx_r)
+                        cy = float(ry0 + cy_r)
+                        x_ratio = max(0.0, min(1.0, cx / float(w)))
+                        y_ratio = max(0.0, min(1.0, cy / float(h)))
+                        if _is_ignored_overlay_xy(x_ratio, y_ratio):
+                            continue
+                        conf = min(1.0, 0.24 + (ring_ratio * 0.52) + min(0.18, area_ratio * 90.0))
+                        candidates.append(
+                            {
+                                "x_ratio": x_ratio,
+                                "y_ratio": y_ratio,
+                                "area_ratio": area_ratio,
+                                "conf": conf,
+                                "radius_px": float(r),
+                            }
+                        )
+
+                # Contour fallback if circle detector found nothing reliable.
+                if not candidates:
+                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    max_allowed_area = roi_area * 0.030
+                    min_allowed_area = max(34.0, float(min_contour_area) * 2.2)
+                    for contour in contours:
+                        area = float(cv2.contourArea(contour))
+                        if area < min_allowed_area or area > max_allowed_area:
+                            continue
+                        perimeter = float(cv2.arcLength(contour, True))
+                        if perimeter <= 1e-6:
+                            continue
+                        circularity = float((4.0 * math.pi * area) / max(1e-6, perimeter * perimeter))
+                        if circularity < 0.44:
+                            continue
+                        bx, by, bw, bh = cv2.boundingRect(contour)
+                        aspect = float(bw) / float(max(1, bh))
+                        if aspect < 0.68 or aspect > 1.45:
+                            continue
+                        cx = float(rx0 + bx + (bw / 2.0))
+                        cy = float(ry0 + by + (bh / 2.0))
+                        x_ratio = max(0.0, min(1.0, cx / float(w)))
+                        y_ratio = max(0.0, min(1.0, cy / float(h)))
+                        if _is_ignored_overlay_xy(x_ratio, y_ratio):
+                            continue
+                        area_ratio = float(area / max(1.0, roi_area))
+                        conf = min(1.0, (0.50 * max(0.0, circularity)) + (area_ratio * 210.0))
+                        candidates.append(
+                            {
+                                "x_ratio": x_ratio,
+                                "y_ratio": y_ratio,
+                                "area_ratio": area_ratio,
+                                "conf": conf,
+                                "radius_px": float((bw + bh) * 0.25),
+                            }
+                        )
+
+                # Deduplicate very close detections.
+                if candidates:
+                    candidates.sort(key=lambda c: float(c.get("conf", 0.0)), reverse=True)
+                    deduped: List[Dict[str, Any]] = []
+                    for c in candidates:
+                        keep = True
+                        for d in deduped:
+                            if (
+                                abs(float(c["x_ratio"]) - float(d["x_ratio"])) <= 0.026
+                                and abs(float(c["y_ratio"]) - float(d["y_ratio"])) <= 0.030
+                            ):
+                                keep = False
+                                break
+                        if keep:
+                            deduped.append(c)
+                    candidates = deduped
+                return candidates
+
             hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mask1 = cv2.inRange(hsv, (0, 95, 75), (12, 255, 255))
-            mask2 = cv2.inRange(hsv, (160, 95, 75), (179, 255, 255))
-            mask = cv2.bitwise_or(mask1, mask2)
+            red_mask1 = cv2.inRange(hsv, (0, 95, 72), (13, 255, 255))
+            red_mask2 = cv2.inRange(hsv, (160, 95, 72), (179, 255, 255))
+            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+            blue_mask = cv2.inRange(hsv, (82, 70, 55), (138, 255, 255))
             kernel = np.ones((3, 3), dtype=np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+            red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+            blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+            blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel)
+            red_mask = _suppress_ui_regions(red_mask)
+            blue_mask = _suppress_ui_regions(blue_mask)
 
-            red_ratio = float(mask.mean() / 255.0)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            best = None
-            best_area = 0.0
+            red_ratio = float(red_mask.mean() / 255.0)
+            blue_ratio = float(blue_mask.mean() / 255.0)
             roi_area = float(max(1, roi.shape[0] * roi.shape[1]))
-            max_allowed_area = roi_area * 0.08
-            for contour in contours:
-                area = float(cv2.contourArea(contour))
-                if area < max(8.0, float(min_contour_area)):
-                    continue
-                if area > max_allowed_area:
-                    # Ignore giant red blobs (toxic overlays/UI), not enemy-sized targets.
-                    continue
-                bx, by, bw, bh = cv2.boundingRect(contour)
-                aspect = float(bw) / float(max(1, bh))
-                if aspect < 0.25 or aspect > 4.0:
-                    continue
-                if area > best_area:
-                    best_area = area
-                    best = (bx, by, bw, bh)
+            enemies = _extract_candidates(red_mask, roi_area)
+            allies = _extract_candidates(blue_mask, roi_area)
+            enemies = [c for c in enemies if float(c.get("conf", 0.0)) >= 0.62]
+            allies = [c for c in allies if float(c.get("conf", 0.0)) >= 0.55]
+            enemies = [
+                c
+                for c in enemies
+                if _has_health_bar_above(
+                    float(c.get("x_ratio", 0.5) or 0.5),
+                    float(c.get("y_ratio", 0.5) or 0.5),
+                    float(c.get("radius_px", 10.0) or 10.0),
+                )
+            ]
+            allies = [
+                c
+                for c in allies
+                if _has_health_bar_above(
+                    float(c.get("x_ratio", 0.5) or 0.5),
+                    float(c.get("y_ratio", 0.5) or 0.5),
+                    float(c.get("radius_px", 10.0) or 10.0),
+                )
+            ]
 
-            area_ratio = best_area / roi_area if best is not None else 0.0
+            self_x = 0.5
+            self_y = 0.5
+            if allies:
+                best_self = min(
+                    allies,
+                    key=lambda c: (
+                        ((float(c["x_ratio"]) - 0.5) ** 2.0 + (float(c["y_ratio"]) - 0.5) ** 2.0) - (0.10 * float(c["conf"]))
+                    ),
+                )
+                best_dist_center = math.sqrt(
+                    ((float(best_self["x_ratio"]) - 0.5) ** 2.0) + ((float(best_self["y_ratio"]) - 0.5) ** 2.0)
+                )
+                if best_dist_center <= 0.28:
+                    self_x = float(best_self["x_ratio"])
+                    self_y = float(best_self["y_ratio"])
+
+            hp_vis_pct, hp_vis_conf = _estimate_self_hp_from_marker(
+                image_bgr=image,
+                self_x_ratio=self_x,
+                self_y_ratio=self_y,
+            )
+
+            for c in enemies:
+                dist = math.sqrt(
+                    ((float(c["x_ratio"]) - self_x) ** 2.0) + ((float(c["y_ratio"]) - self_y) ** 2.0)
+                )
+                c["distance_norm"] = min(1.0, float(dist / 0.70710678118))
+            for c in allies:
+                dist = math.sqrt(
+                    ((float(c["x_ratio"]) - self_x) ** 2.0) + ((float(c["y_ratio"]) - self_y) ** 2.0)
+                )
+                c["distance_norm"] = min(1.0, float(dist / 0.70710678118))
+
+            allies_non_self: List[Dict[str, Any]] = [
+                c for c in allies if float(c.get("distance_norm", 1.0)) >= 0.060
+            ]
+            filtered_enemies: List[Dict[str, Any]] = []
+            for c in enemies:
+                c_dist = float(c.get("distance_norm", 1.0))
+                if c_dist < 0.055:
+                    continue
+                too_close_to_ally = False
+                for a in allies:
+                    ax = float(a.get("x_ratio", 0.5) or 0.5)
+                    ay = float(a.get("y_ratio", 0.5) or 0.5)
+                    d = math.sqrt(
+                        ((float(c.get("x_ratio", 0.5) or 0.5) - ax) ** 2.0)
+                        + ((float(c.get("y_ratio", 0.5) or 0.5) - ay) ** 2.0)
+                    )
+                    if d <= 0.045:
+                        too_close_to_ally = True
+                        break
+                if too_close_to_ally:
+                    continue
+                filtered_enemies.append(c)
+            enemies = filtered_enemies
+            allies = allies_non_self
+
+            enemies.sort(key=lambda c: (float(c.get("distance_norm", 1.0)), -float(c.get("conf", 0.0))))
+            allies.sort(key=lambda c: (float(c.get("distance_norm", 1.0)), -float(c.get("conf", 0.0))))
+
+            enemy_count = int(min(len(enemies), 4))
+            ally_count = int(min(len(allies), 4))
+            area_ratio = float(enemies[0]["area_ratio"]) if enemies else 0.0
             red_threshold = max(0.001, float(red_ratio_threshold))
-            if best is None or (red_ratio < red_threshold and area_ratio < 0.0011):
-                return {
-                    "detected": False,
-                    "confidence": min(0.4, red_ratio * 25.0),
-                    "near": False,
-                    "x_ratio": 0.5,
-                    "y_ratio": 0.5,
-                    "direction_key": "KeyW",
-                    "dir": "CENTER",
-                    "red_ratio": red_ratio,
-                    "area_ratio": 0.0,
-                }
 
-            bx, by, bw, bh = best
-            cx = float(rx0 + bx + (bw / 2.0))
-            cy = float(ry0 + by + (bh / 2.0))
-            x_ratio = max(0.0, min(1.0, cx / float(w)))
-            y_ratio = max(0.0, min(1.0, cy / float(h)))
-            dx = x_ratio - 0.5
-            dy = y_ratio - 0.5
+            if enemy_count <= 0 or (red_ratio < red_threshold and area_ratio < 0.0011):
+                payload = dict(default_payload)
+                payload["confidence"] = min(0.45, red_ratio * 25.0)
+                payload["red_ratio"] = red_ratio
+                payload["blue_ratio"] = blue_ratio
+                payload["enemy_count"] = enemy_count
+                payload["ally_count"] = ally_count
+                payload["targets"] = []
+                payload["allies"] = [
+                    {
+                        "x_ratio": float(c["x_ratio"]),
+                        "y_ratio": float(c["y_ratio"]),
+                        "conf": float(c["conf"]),
+                        "area_ratio": float(c["area_ratio"]),
+                        "distance_norm": float(c.get("distance_norm", 1.0)),
+                    }
+                    for c in allies[:4]
+                ]
+                payload["self_xy"] = (float(self_x), float(self_y))
+                if hp_vis_pct is not None:
+                    payload["self_hp_pct"] = float(hp_vis_pct)
+                    payload["self_hp_conf"] = float(hp_vis_conf)
+                return payload
+
+            primary = enemies[0]
+            x_ratio = float(primary["x_ratio"])
+            y_ratio = float(primary["y_ratio"])
+            dx = x_ratio - float(self_x)
+            dy = y_ratio - float(self_y)
 
             if abs(dx) >= abs(dy):
                 direction_key = "KeyD" if dx >= 0 else "KeyA"
@@ -6170,10 +6538,17 @@ def main() -> None:
             if direction_label == "CENTER":
                 direction_label = "CENTER"
 
-            near = bool(area_ratio >= 0.014 or (abs(dx) < 0.18 and abs(dy) < 0.18))
-            confidence = min(1.0, (red_ratio * 35.0) + (area_ratio * 220.0))
+            distance_norm = float(primary.get("distance_norm", 1.0))
+            near = bool(distance_norm <= 0.22 or area_ratio >= 0.014)
+            confidence = min(
+                1.0,
+                max(
+                    float(primary.get("conf", 0.0)),
+                    (red_ratio * 35.0) + (area_ratio * 220.0),
+                ),
+            )
 
-            return {
+            payload = {
                 "detected": True,
                 "confidence": confidence,
                 "near": near,
@@ -6182,20 +6557,42 @@ def main() -> None:
                 "direction_key": direction_key,
                 "dir": direction_label,
                 "red_ratio": red_ratio,
+                "blue_ratio": blue_ratio,
                 "area_ratio": area_ratio,
+                "distance_norm": distance_norm,
+                "enemy_count": enemy_count,
+                "ally_count": ally_count,
+                "targets": [
+                    {
+                        "x_ratio": float(c["x_ratio"]),
+                        "y_ratio": float(c["y_ratio"]),
+                        "conf": float(c["conf"]),
+                        "area_ratio": float(c["area_ratio"]),
+                        "distance_norm": float(c.get("distance_norm", 1.0)),
+                    }
+                    for c in enemies[:4]
+                ],
+                "allies": [
+                    {
+                        "x_ratio": float(c["x_ratio"]),
+                        "y_ratio": float(c["y_ratio"]),
+                        "conf": float(c["conf"]),
+                        "area_ratio": float(c["area_ratio"]),
+                        "distance_norm": float(c.get("distance_norm", 1.0)),
+                    }
+                    for c in allies[:4]
+                ],
+                "self_xy": (float(self_x), float(self_y)),
             }
+            if hp_vis_pct is not None:
+                payload["self_hp_pct"] = float(hp_vis_pct)
+                payload["self_hp_conf"] = float(hp_vis_conf)
+            else:
+                payload["self_hp_pct"] = None
+                payload["self_hp_conf"] = 0.0
+            return payload
         except Exception:
-            return {
-                "detected": False,
-                "confidence": 0.0,
-                "near": False,
-                "x_ratio": 0.5,
-                "y_ratio": 0.5,
-                "direction_key": "KeyW",
-                "dir": "CENTER",
-                "red_ratio": 0.0,
-                "area_ratio": 0.0,
-            }
+            return dict(default_payload)
 
     def dispatch_dom_left_click(frame_obj: Frame, frame_x: float, frame_y: float) -> bool:
         script = """
@@ -8632,6 +9029,15 @@ def main() -> None:
                     "dir": "CENTER",
                     "red_ratio": 0.0,
                     "area_ratio": 0.0,
+                    "blue_ratio": 0.0,
+                    "distance_norm": None,
+                    "enemy_count": 0,
+                    "ally_count": 0,
+                    "targets": [],
+                    "allies": [],
+                    "self_xy": (0.5, 0.5),
+                    "self_hp_pct": None,
+                    "self_hp_conf": 0.0,
                 }
                 enemy_scan_last_at = 0.0
                 enemy_last_seen_at = 0.0
@@ -9565,6 +9971,26 @@ def main() -> None:
                                     float(enemy_scan_result.get("confidence", 0.0) or 0.0),
                                     prev_conf * 0.92,
                                 )
+                                enemy_scan_result["distance_norm"] = prev_enemy_signal_cache.get("distance_norm")
+                                enemy_scan_result["targets"] = list(prev_enemy_signal_cache.get("targets", []) or [])
+                                enemy_scan_result["allies"] = list(prev_enemy_signal_cache.get("allies", []) or [])
+                                enemy_scan_result["enemy_count"] = int(prev_enemy_signal_cache.get("enemy_count", 0) or 0)
+                                enemy_scan_result["ally_count"] = int(prev_enemy_signal_cache.get("ally_count", 0) or 0)
+                                enemy_scan_result["self_xy"] = prev_enemy_signal_cache.get("self_xy", (0.5, 0.5))
+                            hp_vis_pct = enemy_scan_result.get("self_hp_pct")
+                            hp_vis_conf = float(enemy_scan_result.get("self_hp_conf", 0.0) or 0.0)
+                            if hp_vis_pct is not None and hp_vis_conf >= 0.20:
+                                try:
+                                    hp_vis = max(0.0, min(100.0, float(hp_vis_pct)))
+                                    prev_hp_vis = bot_event_signals.get("health_current")
+                                    if prev_hp_vis is not None:
+                                        hp_vis = (0.60 * float(prev_hp_vis)) + (0.40 * hp_vis)
+                                    bot_event_signals["health_max"] = 100.0
+                                    bot_event_signals["health_current"] = hp_vis
+                                    bot_event_signals["health_source"] = "vision"
+                                    bot_event_signals["health_signal_ts"] = now_mono
+                                except Exception:
+                                    pass
                             enemy_signal_cache = enemy_scan_result
                             enemy_scan_last_at = now_mono
                             if bool(enemy_signal_cache.get("detected", False)):
@@ -9574,6 +10000,12 @@ def main() -> None:
                                 bot_event_signals["enemy_signal_confidence"] = float(
                                     enemy_signal_cache.get("confidence", 0.0) or 0.0
                                 )
+                        enemy_targets_cached = (
+                            enemy_signal_cache.get("targets", [])
+                            if isinstance(enemy_signal_cache.get("targets", []), list)
+                            else []
+                        )
+                        enemy_target_count_cached = len(enemy_targets_cached)
                         enemy_recent = bool(enemy_signal_cache.get("detected", False)) or (
                             (enemy_last_seen_at > 0.0) and ((now_mono - enemy_last_seen_at) <= 1.4)
                         )
@@ -9584,6 +10016,9 @@ def main() -> None:
                         enemy_conf_ema_prev = float(enemy_signal_cache.get("_ema_conf", enemy_conf_raw) or enemy_conf_raw)
                         enemy_conf_ema = (0.62 * enemy_conf_ema_prev) + (0.38 * enemy_conf_raw)
                         enemy_signal_cache["_ema_conf"] = enemy_conf_ema
+                        if enemy_target_count_cached <= 0 and not bool(enemy_signal_cache.get("detected", False)):
+                            if (enemy_last_seen_at <= 0.0) or ((now_mono - enemy_last_seen_at) > 0.85):
+                                enemy_recent = False
                         if (not bool(enemy_signal_cache.get("detected", False))) and enemy_conf_ema < 0.18:
                             enemy_recent = False
                         elif bool(enemy_signal_cache.get("detected", False)) and enemy_conf_ema < 0.12:
@@ -10794,15 +11229,35 @@ def main() -> None:
                             max_mana = max(1.0, float(ability_state.get("max_mana", 100.0) or 100.0))
                             stamina_pct = max(0.0, min(100.0, (mana_now / max_mana) * 100.0))
 
-                            enemy_visible_now = bool(
-                                enemy_for_feedback.get("recent", enemy_for_feedback.get("detected", False))
-                            )
                             enemy_conf_now = max(0.0, min(1.0, float(enemy_for_feedback.get("confidence", 0.0) or 0.0)))
+                            enemy_tracks_now = (
+                                enemy_for_feedback.get("targets", [])
+                                if isinstance(enemy_for_feedback.get("targets", []), list)
+                                else []
+                            )
+                            enemy_count_hint = int(enemy_for_feedback.get("enemy_count", 0) or 0)
+                            enemy_visible_now = bool(
+                                enemy_count_hint > 0
+                                or len(enemy_tracks_now) > 0
+                                or (
+                                    bool(enemy_for_feedback.get("detected", False))
+                                    and (enemy_conf_now >= 0.45)
+                                )
+                                or (
+                                    bool(enemy_for_feedback.get("recent", False))
+                                    and (enemy_conf_now >= 0.70)
+                                )
+                            )
                             enemy_x = float(enemy_for_feedback.get("x_ratio", 0.5) or 0.5)
                             enemy_y = float(enemy_for_feedback.get("y_ratio", 0.5) or 0.5)
                             enemy_xy = (enemy_x, enemy_y) if enemy_visible_now else None
-                            enemy_dist_norm = None
-                            if enemy_xy is not None:
+                            enemy_dist_norm = enemy_for_feedback.get("distance_norm")
+                            try:
+                                if enemy_dist_norm is not None:
+                                    enemy_dist_norm = max(0.0, min(1.0, float(enemy_dist_norm)))
+                            except Exception:
+                                enemy_dist_norm = None
+                            if enemy_dist_norm is None and enemy_xy is not None:
                                 enemy_dist_norm = min(
                                     1.0,
                                     ((float(enemy_x) - 0.5) ** 2.0 + (float(enemy_y) - 0.5) ** 2.0) ** 0.5 / 0.70710678118,
@@ -10842,21 +11297,71 @@ def main() -> None:
                                 telemetry_dmg_out_tick = max(telemetry_dmg_out_tick, float(proxy_gain))
 
                             entities_payload: List[Any] = []
+                            enemy_tracks_raw = (
+                                enemy_for_feedback.get("targets", [])
+                                if isinstance(enemy_for_feedback.get("targets", []), list)
+                                else []
+                            )
+                            ally_tracks_raw = (
+                                enemy_for_feedback.get("allies", [])
+                                if isinstance(enemy_for_feedback.get("allies", []), list)
+                                else []
+                            )
                             enemy_guardian_name = str(bot_event_signals.get("enemy_guardian", "") or "").strip()
                             own_guardian_name = str(bot_event_signals.get("own_guardian", "") or "").strip()
-                            if LiveTelemetryEntityTrack is not None and enemy_visible_now:
-                                entities_payload.append(
-                                    LiveTelemetryEntityTrack(
-                                        name=(enemy_guardian_name if enemy_guardian_name else "Enemy"),
-                                        kind="player",
-                                        team="enemy",
-                                        hp_pct=None,
-                                        conf=enemy_conf_now,
-                                        distance_norm=enemy_dist_norm,
-                                        anchor_xy=enemy_xy,
-                                    )
-                                )
+                            enemy_entities_added = 0
+                            extra_allies_added = 0
                             if LiveTelemetryEntityTrack is not None:
+                                if enemy_tracks_raw:
+                                    for idx, track in enumerate(enemy_tracks_raw[:5]):
+                                        if not isinstance(track, dict):
+                                            continue
+                                        tx = track.get("x_ratio")
+                                        ty = track.get("y_ratio")
+                                        if tx is None or ty is None:
+                                            continue
+                                        try:
+                                            txf = max(0.0, min(1.0, float(tx)))
+                                            tyf = max(0.0, min(1.0, float(ty)))
+                                            tconf = max(0.0, min(1.0, float(track.get("conf", enemy_conf_now) or enemy_conf_now)))
+                                            tdist = track.get("distance_norm")
+                                            tdist_f = (
+                                                max(0.0, min(1.0, float(tdist)))
+                                                if tdist is not None
+                                                else min(1.0, (((txf - 0.5) ** 2.0 + (tyf - 0.5) ** 2.0) ** 0.5 / 0.70710678118))
+                                            )
+                                        except Exception:
+                                            continue
+                                        entities_payload.append(
+                                            LiveTelemetryEntityTrack(
+                                                name=(
+                                                    enemy_guardian_name
+                                                    if (enemy_guardian_name and idx == 0)
+                                                    else f"Enemy#{idx + 1}"
+                                                ),
+                                                kind="player",
+                                                team="enemy",
+                                                hp_pct=None,
+                                                conf=tconf,
+                                                distance_norm=tdist_f,
+                                                anchor_xy=(txf, tyf),
+                                            )
+                                        )
+                                        enemy_entities_added += 1
+                                elif enemy_visible_now and enemy_xy is not None:
+                                    entities_payload.append(
+                                        LiveTelemetryEntityTrack(
+                                            name=(enemy_guardian_name if enemy_guardian_name else "Enemy"),
+                                            kind="player",
+                                            team="enemy",
+                                            hp_pct=None,
+                                            conf=enemy_conf_now,
+                                            distance_norm=enemy_dist_norm,
+                                            anchor_xy=enemy_xy,
+                                        )
+                                    )
+                                    enemy_entities_added += 1
+
                                 entities_payload.append(
                                     LiveTelemetryEntityTrack(
                                         name=(own_guardian_name if own_guardian_name else "Self"),
@@ -10868,8 +11373,49 @@ def main() -> None:
                                         anchor_xy=(0.5, 0.5),
                                     )
                                 )
-                            ally_count_now = len([e for e in entities_payload if str(getattr(e, "team", "unknown")) == "ally"])
-                            enemy_count_now = len([e for e in entities_payload if str(getattr(e, "team", "unknown")) == "enemy"])
+
+                                for idx, track in enumerate(ally_tracks_raw[:5]):
+                                    if not isinstance(track, dict):
+                                        continue
+                                    tx = track.get("x_ratio")
+                                    ty = track.get("y_ratio")
+                                    if tx is None or ty is None:
+                                        continue
+                                    try:
+                                        txf = max(0.0, min(1.0, float(tx)))
+                                        tyf = max(0.0, min(1.0, float(ty)))
+                                        tdist = track.get("distance_norm")
+                                        tdist_f = (
+                                            max(0.0, min(1.0, float(tdist)))
+                                            if tdist is not None
+                                            else min(1.0, (((txf - 0.5) ** 2.0 + (tyf - 0.5) ** 2.0) ** 0.5 / 0.70710678118))
+                                        )
+                                        if tdist_f <= 0.05:
+                                            continue
+                                        tconf = max(0.0, min(1.0, float(track.get("conf", 0.4) or 0.4)))
+                                    except Exception:
+                                        continue
+                                    entities_payload.append(
+                                        LiveTelemetryEntityTrack(
+                                            name=f"Ally#{idx + 1}",
+                                            kind="player",
+                                            team="ally",
+                                            hp_pct=None,
+                                            conf=tconf,
+                                            distance_norm=tdist_f,
+                                            anchor_xy=(txf, tyf),
+                                        )
+                                    )
+                                    extra_allies_added += 1
+
+                            enemy_count_now = int(enemy_for_feedback.get("enemy_count", 0) or 0)
+                            if enemy_count_now <= 0:
+                                enemy_count_now = enemy_entities_added
+                            if enemy_visible_now and enemy_count_now <= 0:
+                                enemy_count_now = 1
+                            ally_count_now = int(enemy_for_feedback.get("ally_count", 0) or 0)
+                            if ally_count_now <= 0:
+                                ally_count_now = 1 + int(extra_allies_added)
 
                             telemetry_writer.maybe_emit(
                                 LiveTelemetryFrame(
