@@ -8657,6 +8657,7 @@ def main() -> None:
                 knowledge_prev_damage_taken = float(bot_event_signals.get("damage_taken_total", 0.0) or 0.0)
                 telemetry_prev_click_count = 0
                 telemetry_damage_out_proxy_total = 0.0
+                telemetry_prev_hp_pct: Optional[float] = None
                 telemetry_monitor = create_runtime_telemetry_monitor()
                 last_tick_telemetry: Optional[Dict[str, Any]] = None
                 knowledge_prev_move_action = ""
@@ -9542,13 +9543,29 @@ def main() -> None:
                         if bool(args.bot_enemy_vision) and (
                             (now_mono - enemy_scan_last_at) >= enemy_scan_interval_sec
                         ):
-                            enemy_signal_cache = detect_enemy_signal_from_canvas(
+                            prev_enemy_signal_cache = dict(enemy_signal_cache)
+                            enemy_scan_result = detect_enemy_signal_from_canvas(
                                 page_obj=page,
                                 frame_obj=game_actual_frame,
                                 iframe_selector=iframe_selector,
                                 red_ratio_threshold=float(args.bot_enemy_red_ratio_threshold),
                                 min_contour_area=float(args.bot_enemy_min_area),
                             )
+                            if not bool(enemy_scan_result.get("detected", False)):
+                                # Keep last known localization briefly instead of snapping to center.
+                                enemy_scan_result["x_ratio"] = float(prev_enemy_signal_cache.get("x_ratio", 0.5) or 0.5)
+                                enemy_scan_result["y_ratio"] = float(prev_enemy_signal_cache.get("y_ratio", 0.5) or 0.5)
+                                enemy_scan_result["dir"] = str(prev_enemy_signal_cache.get("dir", "CENTER") or "CENTER")
+                                enemy_scan_result["direction_key"] = str(
+                                    prev_enemy_signal_cache.get("direction_key", "KeyW") or "KeyW"
+                                )
+                                enemy_scan_result["near"] = bool(prev_enemy_signal_cache.get("near", False))
+                                prev_conf = float(prev_enemy_signal_cache.get("confidence", 0.0) or 0.0)
+                                enemy_scan_result["confidence"] = max(
+                                    float(enemy_scan_result.get("confidence", 0.0) or 0.0),
+                                    prev_conf * 0.92,
+                                )
+                            enemy_signal_cache = enemy_scan_result
                             enemy_scan_last_at = now_mono
                             if bool(enemy_signal_cache.get("detected", False)):
                                 enemy_last_seen_at = now_mono
@@ -10732,7 +10749,7 @@ def main() -> None:
                             hp_ratio = (
                                 (float(health_current_for_feedback) / max(1.0, float(health_max_for_feedback))) * 100.0
                             )
-                            hp_pct = max(0.0, min(100.0, hp_ratio))
+                            hp_pct_raw = max(0.0, min(100.0, hp_ratio))
                             hp_source_raw = str(
                                 tick_telemetry.get("health_source", bot_event_signals.get("health_source", "fallback"))
                                 or "fallback"
@@ -10762,6 +10779,17 @@ def main() -> None:
                                 hp_src = "fallback"
                                 hp_conf = 0.30
 
+                            hp_pct = float(hp_pct_raw)
+                            # If HP source is weak fallback, force responsive decreases from damage deltas.
+                            if hp_src == "fallback" and telemetry_prev_hp_pct is not None:
+                                if float(damage_taken_delta) > 1e-6:
+                                    hp_pct = max(0.0, float(telemetry_prev_hp_pct) - float(damage_taken_delta))
+                                    hp_conf = max(float(hp_conf), 0.45)
+                                elif hp_pct > (float(telemetry_prev_hp_pct) + 12.0):
+                                    hp_pct = min(hp_pct, float(telemetry_prev_hp_pct) + 2.0)
+                            hp_pct = max(0.0, min(100.0, float(hp_pct)))
+                            telemetry_prev_hp_pct = float(hp_pct)
+
                             mana_now = float(ability_state.get("mana", 0.0) or 0.0)
                             max_mana = max(1.0, float(ability_state.get("max_mana", 100.0) or 100.0))
                             stamina_pct = max(0.0, min(100.0, (mana_now / max_mana) * 100.0))
@@ -10773,6 +10801,17 @@ def main() -> None:
                             enemy_x = float(enemy_for_feedback.get("x_ratio", 0.5) or 0.5)
                             enemy_y = float(enemy_for_feedback.get("y_ratio", 0.5) or 0.5)
                             enemy_xy = (enemy_x, enemy_y) if enemy_visible_now else None
+                            enemy_dist_norm = None
+                            if enemy_xy is not None:
+                                enemy_dist_norm = min(
+                                    1.0,
+                                    ((float(enemy_x) - 0.5) ** 2.0 + (float(enemy_y) - 0.5) ** 2.0) ** 0.5 / 0.70710678118,
+                                )
+                            enemy_age_ms = (
+                                max(0.0, (float(now_mono) - float(enemy_last_seen_at)) * 1000.0)
+                                if float(enemy_last_seen_at) > 0.0
+                                else None
+                            )
                             attack_label_l = str(last_action_label or "").lower()
                             attack_evidence = bool(
                                 click_count_delta > 0
@@ -10805,24 +10844,32 @@ def main() -> None:
                             entities_payload: List[Any] = []
                             enemy_guardian_name = str(bot_event_signals.get("enemy_guardian", "") or "").strip()
                             own_guardian_name = str(bot_event_signals.get("own_guardian", "") or "").strip()
-                            if LiveTelemetryEntityTrack is not None and enemy_guardian_name:
+                            if LiveTelemetryEntityTrack is not None and enemy_visible_now:
                                 entities_payload.append(
                                     LiveTelemetryEntityTrack(
-                                        name=enemy_guardian_name,
+                                        name=(enemy_guardian_name if enemy_guardian_name else "Enemy"),
                                         kind="player",
+                                        team="enemy",
                                         hp_pct=None,
                                         conf=enemy_conf_now,
+                                        distance_norm=enemy_dist_norm,
+                                        anchor_xy=enemy_xy,
                                     )
                                 )
-                            if LiveTelemetryEntityTrack is not None and own_guardian_name:
+                            if LiveTelemetryEntityTrack is not None:
                                 entities_payload.append(
                                     LiveTelemetryEntityTrack(
-                                        name=own_guardian_name,
-                                        kind="player",
+                                        name=(own_guardian_name if own_guardian_name else "Self"),
+                                        kind="bot",
+                                        team="ally",
                                         hp_pct=hp_pct,
                                         conf=max(0.5, hp_conf),
+                                        distance_norm=0.0,
+                                        anchor_xy=(0.5, 0.5),
                                     )
                                 )
+                            ally_count_now = len([e for e in entities_payload if str(getattr(e, "team", "unknown")) == "ally"])
+                            enemy_count_now = len([e for e in entities_payload if str(getattr(e, "team", "unknown")) == "enemy"])
 
                             telemetry_writer.maybe_emit(
                                 LiveTelemetryFrame(
@@ -10843,6 +10890,10 @@ def main() -> None:
                                     enemy_conf=enemy_conf_now,
                                     enemy_dir_deg=None,
                                     enemy_xy=enemy_xy,
+                                    enemy_dist_norm=enemy_dist_norm,
+                                    enemy_age_ms=enemy_age_ms,
+                                    ally_count=ally_count_now,
+                                    enemy_count=enemy_count_now,
                                     zone_outside=bool(bot_event_signals.get("zone_outside_safe", False)),
                                     zone_toxic=bool(bot_event_signals.get("zone_toxic_detected", False)),
                                     zone_countdown_s=(

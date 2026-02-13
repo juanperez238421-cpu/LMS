@@ -205,6 +205,31 @@ canvas#radar {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
 }
+.radar-legend {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.dot.ally {
+  background: #4ea1ff;
+}
+.dot.enemy {
+  background: #ff5e57;
+}
+.dot.self {
+  background: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-sizing: border-box;
+}
 
 pre.mono, pre.events {
   margin: 0;

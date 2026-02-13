@@ -42,6 +42,19 @@ def main():
 
             enemy_vis = random.random() < 0.5
             enemy_conf = random.random() if enemy_vis else 0.0
+            enemy_xy = (
+                (
+                    max(0.0, min(1.0, 0.5 + (0.35 * math.cos(t * 0.9)))),
+                    max(0.0, min(1.0, 0.5 + (0.35 * math.sin(t * 0.9)))),
+                )
+                if enemy_vis
+                else None
+            )
+            enemy_dist_norm = (
+                min(1.0, math.hypot(enemy_xy[0] - 0.5, enemy_xy[1] - 0.5) / 0.70710678118)
+                if enemy_xy
+                else None
+            )
 
             frame = TelemetryFrame(
                 ts_ms=now_ms(),
@@ -60,15 +73,51 @@ def main():
                 enemy_visible=enemy_vis,
                 enemy_conf=enemy_conf,
                 enemy_dir_deg=(math.sin(t) * 180) if enemy_vis else None,
+                enemy_xy=enemy_xy,
+                enemy_dist_norm=enemy_dist_norm,
+                enemy_age_ms=(0.0 if enemy_vis else random.uniform(200, 1200)),
+                ally_count=1,
+                enemy_count=(1 if enemy_vis else 0),
                 decision="ENGAGE" if enemy_vis else "SCOUT",
                 action_last=random.choice(["", "Digit1", "Digit2", "Digit3", "Shift", "MouseLeft"]),
                 action_ok=True,
                 motion_score=abs(math.sin(t * 0.3)),
                 stuck=False,
                 collision_proxy=False,
-                entities=[
-                    EntityTrack(name="EnemyA", kind="player", hp_pct=random.uniform(10, 100), conf=enemy_conf)
-                ] if enemy_vis else [],
+                entities=(
+                    [
+                        EntityTrack(
+                            name="Self",
+                            kind="bot",
+                            team="ally",
+                            hp_pct=hp,
+                            conf=0.95,
+                            distance_norm=0.0,
+                            anchor_xy=(0.5, 0.5),
+                        ),
+                        EntityTrack(
+                            name="EnemyA",
+                            kind="player",
+                            team="enemy",
+                            hp_pct=random.uniform(10, 100),
+                            conf=enemy_conf,
+                            distance_norm=enemy_dist_norm,
+                            anchor_xy=enemy_xy,
+                        ),
+                    ]
+                    if enemy_vis
+                    else [
+                        EntityTrack(
+                            name="Self",
+                            kind="bot",
+                            team="ally",
+                            hp_pct=hp,
+                            conf=0.95,
+                            distance_norm=0.0,
+                            anchor_xy=(0.5, 0.5),
+                        )
+                    ]
+                ),
             )
             w.maybe_emit(frame)
             time.sleep(1.0 / args.rate)

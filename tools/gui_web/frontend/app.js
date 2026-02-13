@@ -4,6 +4,8 @@ function clamp01(x) { return Math.max(0, Math.min(1, x)); }
 function fmtPct(x) { return (x === null || x === undefined) ? "-" : `${Number(x).toFixed(1)}%`; }
 function fmtNum(x) { return (x === null || x === undefined) ? "-" : `${Number(x).toFixed(1)}`; }
 function safeText(v) { return (v === null || v === undefined || v === "") ? "-" : String(v); }
+function numOrNull(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+function clampPct(v) { const n = numOrNull(v); return n === null ? null : Math.max(0, Math.min(100, n)); }
 
 let paused = false;
 let frozenByDeath = false;
@@ -22,6 +24,8 @@ const hpHist = [];
 const stHist = [];
 const dinHist = [];
 const doutHist = [];
+let hpDisplayLast = null;
+let lastEnemyTrack = null;
 
 function pushHist(t, hp, st, din, dout) {
   tHist.push(t);
@@ -43,7 +47,63 @@ function setBar(el, pct) {
   el.style.width = `${(p * 100).toFixed(1)}%`;
 }
 
-function radarDraw(enemyXY) {
+function inferTeam(entity) {
+  const team = String(entity?.team ?? "").toLowerCase();
+  if (team === "ally" || team === "enemy") return team;
+  const kind = String(entity?.kind ?? "").toLowerCase();
+  if (kind === "bot") return "ally";
+  if (kind === "player") return "enemy";
+  return "unknown";
+}
+
+function collectRadarTracks(frame) {
+  const tracks = { allies: [], enemies: [] };
+  const entities = Array.isArray(frame.entities) ? frame.entities : [];
+  for (const e of entities) {
+    const p = e?.anchor_xy;
+    if (!Array.isArray(p) || p.length !== 2) continue;
+    const x = clamp01(Number(p[0]));
+    const y = clamp01(Number(p[1]));
+    const dx = x - 0.5;
+    const dy = y - 0.5;
+    const dist = Math.min(1, Math.hypot(dx, dy) / 0.70710678118);
+    const item = {
+      name: safeText(e?.name),
+      conf: Number(e?.conf ?? 0),
+      x,
+      y,
+      dist,
+    };
+    const team = inferTeam(e);
+    if (team === "ally") tracks.allies.push(item);
+    if (team === "enemy") tracks.enemies.push(item);
+  }
+
+  const enemyVisible = !!frame.enemy_visible;
+  const enemyXY = frame.enemy_xy;
+  if (enemyVisible && Array.isArray(enemyXY) && enemyXY.length === 2) {
+    const x = clamp01(Number(enemyXY[0]));
+    const y = clamp01(Number(enemyXY[1]));
+    const dx = x - 0.5;
+    const dy = y - 0.5;
+    const dist = Math.min(1, Math.hypot(dx, dy) / 0.70710678118);
+    lastEnemyTrack = {
+      name: "Enemy",
+      conf: Number(frame.enemy_conf ?? 0),
+      x,
+      y,
+      dist,
+      ts: Date.now(),
+    };
+    tracks.enemies.push(lastEnemyTrack);
+  } else if (lastEnemyTrack && (Date.now() - lastEnemyTrack.ts) <= 1500) {
+    tracks.enemies.push(lastEnemyTrack);
+  }
+
+  return tracks;
+}
+
+function radarDraw(radarState) {
   const canvas = $("radar");
   const ctx = canvas.getContext("2d");
   const w = (canvas.width = canvas.clientWidth);
@@ -70,16 +130,33 @@ function radarDraw(enemyXY) {
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.stroke();
 
-  if (enemyXY && enemyXY.length === 2) {
-    const ex = clamp01(enemyXY[0]);
-    const ey = clamp01(enemyXY[1]);
-    const dx = (ex - 0.5) * 2;
-    const dy = (ey - 0.5) * 2;
-    const px = cx + dx * r;
-    const py = cy + dy * r;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(248,250,252,0.95)";
+  ctx.fill();
+
+  const allies = radarState?.allies ?? [];
+  const enemies = radarState?.enemies ?? [];
+
+  for (const a of allies) {
+    const px = cx + ((a.x - 0.5) * 2 * r);
+    const py = cy + ((a.y - 0.5) * 2 * r);
     ctx.beginPath();
-    ctx.arc(px, py, 5, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(122,162,255,0.9)";
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(78,161,255,0.88)";
+    ctx.fill();
+  }
+
+  for (const e of enemies) {
+    const px = cx + ((e.x - 0.5) * 2 * r);
+    const py = cy + ((e.y - 0.5) * 2 * r);
+    const sz = 6;
+    ctx.beginPath();
+    ctx.moveTo(px, py - sz);
+    ctx.lineTo(px + sz, py + sz);
+    ctx.lineTo(px - sz, py + sz);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255,94,87,0.92)";
     ctx.fill();
   }
 }
@@ -150,12 +227,32 @@ function renderEvents() {
   $("events").textContent = rows.map((e) => e.text).join("\n");
 }
 
+function deriveHpForDisplay(frame) {
+  const raw = clampPct(frame.hp_pct);
+  const src = String(frame.hp_src ?? "unknown").toLowerCase();
+  const dmgInTick = Math.max(0, Number(frame.dmg_in_tick ?? 0));
+  let hp = raw;
+
+  if (hp === null) hp = hpDisplayLast;
+  if (hpDisplayLast !== null && (src === "fallback" || src === "unknown" || src === "heur")) {
+    if (dmgInTick > 0.01 && (raw === null || Math.abs(raw - hpDisplayLast) < 0.05)) {
+      hp = Math.max(0, hpDisplayLast - dmgInTick);
+    } else if (raw !== null && raw > (hpDisplayLast + 12.0)) {
+      hp = Math.min(raw, hpDisplayLast + 2.0);
+    }
+  }
+
+  hp = clampPct(hp);
+  if (hp !== null) hpDisplayLast = hp;
+  return hp;
+}
+
 function renderFrame(frame) {
   const ts = frame.ts_ms ? Number(frame.ts_ms) : 0;
   if (ts && ts === lastFrameTs) return;
   lastFrameTs = ts;
 
-  const hp = frame.hp_pct;
+  const hp = deriveHpForDisplay(frame);
   $("hp").textContent = fmtPct(hp);
   $("hpConf").textContent = Number(frame.hp_conf ?? 0).toFixed(2);
   $("hpSrc").textContent = safeText(frame.hp_src);
@@ -178,7 +275,16 @@ function renderFrame(frame) {
   $("enemyConf").textContent = Number(frame.enemy_conf ?? 0).toFixed(2);
   $("enemyDir").textContent = safeText(frame.enemy_dir_deg);
   $("enemyXY").textContent = frame.enemy_xy ? JSON.stringify(frame.enemy_xy) : "-";
-  radarDraw(frame.enemy_xy);
+  const radarState = collectRadarTracks(frame);
+  radarDraw(radarState);
+  const enemyDist = numOrNull(frame.enemy_dist_norm);
+  const inferredDist = (radarState.enemies.length > 0) ? radarState.enemies[0].dist : null;
+  const distNorm = enemyDist ?? inferredDist;
+  $("enemyDist").textContent = (distNorm === null || !Number.isFinite(distNorm)) ? "-" : `${(distNorm * 100).toFixed(1)}%`;
+  const enemyAgeMs = numOrNull(frame.enemy_age_ms);
+  $("enemyAge").textContent = (enemyAgeMs === null) ? "-" : `${Math.round(enemyAgeMs)} ms`;
+  $("allyCount").textContent = String(Number(frame.ally_count ?? radarState.allies.length ?? 0));
+  $("enemyCount").textContent = String(Number(frame.enemy_count ?? radarState.enemies.length ?? 0));
 
   $("decision").textContent = safeText(frame.decision);
   $("action").textContent = safeText(frame.action_last);
@@ -190,7 +296,7 @@ function renderFrame(frame) {
 
   const ents = frame.entities ?? [];
   $("entities").textContent = ents.slice(0, 20).map((e) =>
-    `${safeText(e.name).padEnd(16)} ${safeText(e.kind).padEnd(7)} hp=${safeText(e.hp_pct).toString().padStart(5)} conf=${Number(e.conf ?? 0).toFixed(2)}`
+    `${safeText(e.name).padEnd(16)} ${safeText(e.kind).padEnd(7)} team=${safeText(e.team).padEnd(6)} hp=${safeText(e.hp_pct).toString().padStart(5)} conf=${Number(e.conf ?? 0).toFixed(2)} dist=${(Number.isFinite(Number(e.distance_norm)) ? (Number(e.distance_norm) * 100).toFixed(1) + '%' : '-')}`
   ).join("\n");
 
   const tLabel = ts ? new Date(ts).toLocaleTimeString() : "";

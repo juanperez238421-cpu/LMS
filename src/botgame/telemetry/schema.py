@@ -4,12 +4,15 @@ from typing import Literal, Optional, List, Tuple
 from pydantic import BaseModel, Field
 
 TelemetrySource = Literal["ws", "ocr", "heur", "fallback", "sim", "unknown"]
+TelemetryTeam = Literal["ally", "enemy", "neutral", "unknown"]
 
 class EntityTrack(BaseModel):
     name: str = ""
     kind: Literal["player", "bot", "npc", "unknown"] = "unknown"
+    team: TelemetryTeam = "unknown"
     hp_pct: Optional[float] = None          # 0..100
     conf: float = 0.0                       # 0..1
+    distance_norm: Optional[float] = None   # 0..1 distance from player center
     anchor_xy: Optional[Tuple[float, float]] = None  # normalized (0..1,0..1)
 
 class TelemetryFrame(BaseModel):
@@ -38,6 +41,10 @@ class TelemetryFrame(BaseModel):
     enemy_conf: float = 0.0
     enemy_dir_deg: Optional[float] = None
     enemy_xy: Optional[Tuple[float, float]] = None  # normalized (0..1,0..1)
+    enemy_dist_norm: Optional[float] = None         # 0..1 from player center
+    enemy_age_ms: Optional[float] = None            # ms since last enemy seen
+    ally_count: int = 0
+    enemy_count: int = 0
 
     # --- zone ---
     zone_outside: bool = False
