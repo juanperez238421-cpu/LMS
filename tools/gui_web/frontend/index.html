@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>LMS Telemetry Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.min.css"/>
+  <link rel="stylesheet" href="/static/styles.css"/>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">LMS</div>
+      <div>
+        <div class="title">Telemetry Dashboard</div>
+        <div class="subtitle">JSONL tail + WS viewer (low overhead)</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div id="wsStatus" class="pill warn">WS: connecting</div>
+      <div class="pill" id="rate">rx: -</div>
+      <div class="pill" id="cfg">cfg: -</div>
+      <label class="chk">
+        <input type="checkbox" id="freezeOnDeath" checked/>
+        Freeze on death
+      </label>
+      <select id="eventFilter" class="sel">
+        <option value="all">events: all</option>
+        <option value="actions">events: actions only</option>
+        <option value="damage">events: damage only</option>
+      </select>
+      <button class="btn" id="btnPause">Pause</button>
+      <button class="btn" id="btnUnfreeze">Unfreeze</button>
+      <button class="btn" id="btnClear">Clear events</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="vitals">Vitals</button>
+    <button class="tab" data-tab="combat">Combat</button>
+    <button class="tab" data-tab="zone">Zone</button>
+    <button class="tab" data-tab="entities">Entities</button>
+    <button class="tab" data-tab="raw">Raw</button>
+  </nav>
+
+  <main>
+    <section class="tab-pane active" data-pane="vitals">
+      <div class="grid two">
+        <section class="card">
+          <div class="card-h">
+            <h3>Vitals</h3>
+            <div class="meta" id="ts">-</div>
+          </div>
+
+          <div class="kv">
+            <div class="k">HP</div><div class="v" id="hp">-</div>
+            <div class="k">conf</div><div class="v" id="hpConf">-</div>
+            <div class="k">src</div><div class="v" id="hpSrc">-</div>
+          </div>
+          <div class="bar"><div id="hpBar" class="fill"></div></div>
+
+          <div class="kv mt">
+            <div class="k">Stamina</div><div class="v" id="stam">-</div>
+            <div class="k">conf</div><div class="v" id="stamConf">-</div>
+            <div class="k">src</div><div class="v" id="stamSrc">-</div>
+          </div>
+          <div class="bar"><div id="stamBar" class="fill"></div></div>
+
+          <div class="plot" id="plotVitals"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-h">
+            <h3>Perception</h3>
+            <div class="meta">enemy tracking</div>
+          </div>
+          <div class="kv">
+            <div class="k">visible</div><div class="v" id="enemyVis">false</div>
+            <div class="k">conf</div><div class="v" id="enemyConf">0</div>
+            <div class="k">dir</div><div class="v" id="enemyDir">-</div>
+            <div class="k">xy</div><div class="v" id="enemyXY">-</div>
+          </div>
+          <canvas id="radar" height="180"></canvas>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-pane" data-pane="combat">
+      <div class="grid two">
+        <section class="card">
+          <div class="card-h">
+            <h3>Damage</h3>
+            <div class="meta">tick + totals</div>
+          </div>
+
+          <div class="kv">
+            <div class="k">IN tick</div><div class="v" id="dinTick">0</div>
+            <div class="k">IN total</div><div class="v" id="dinTotal">0</div>
+            <div class="k">OUT tick</div><div class="v" id="doutTick">0</div>
+            <div class="k">OUT total</div><div class="v" id="doutTotal">0</div>
+          </div>
+          <div class="plot" id="plotDamage"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-h">
+            <h3>Decision and Events</h3>
+            <div class="meta" id="freezeState">live</div>
+          </div>
+          <div class="kv">
+            <div class="k">decision</div><div class="v" id="decision">-</div>
+            <div class="k">action</div><div class="v" id="action">-</div>
+            <div class="k">ok</div><div class="v" id="actionOk">-</div>
+          </div>
+          <pre id="events" class="events"></pre>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-pane" data-pane="zone">
+      <div class="grid one">
+        <section class="card">
+          <div class="card-h">
+            <h3>Zone</h3>
+            <div class="meta">safety and countdown</div>
+          </div>
+          <div class="kv">
+            <div class="k">outside</div><div class="v" id="zoneOutside">false</div>
+            <div class="k">toxic</div><div class="v" id="zoneToxic">false</div>
+            <div class="k">countdown</div><div class="v" id="zoneCd">-</div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-pane" data-pane="entities">
+      <div class="grid one">
+        <section class="card">
+          <div class="card-h">
+            <h3>Entities</h3>
+            <div class="meta">top 20</div>
+          </div>
+          <pre id="entities" class="mono"></pre>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-pane" data-pane="raw">
+      <div class="grid one">
+        <section class="card">
+          <div class="card-h">
+            <h3>Raw frame</h3>
+            <div class="meta">debug payload</div>
+          </div>
+          <pre id="raw" class="mono"></pre>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.32/dist/uPlot.iife.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

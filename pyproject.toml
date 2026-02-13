@@ -23,8 +23,10 @@ dev = [
 ]
 lms = [
     "playwright>=1.50.0",
+    "fastapi>=0.129.0",
     "opencv-python>=4.10.0",
     "pytesseract>=0.3.10",
+    "uvicorn>=0.40.0",
 ]
 
 [tool.setuptools]
