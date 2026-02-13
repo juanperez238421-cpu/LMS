@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "botgame"
+version = "0.1.0"
+dependencies = [
+    "numpy",
+    "pydantic",
+    "rich",
+    "tqdm",
+    "gymnasium",
+    "stable-baselines3",
+    "torch",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+lms = [
+    "playwright>=1.50.0",
+    "opencv-python>=4.10.0",
+    "pytesseract>=0.3.10",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"] # list of folders that contain the packages (["."])
+# For a src-layout, if the root is `src`, then `where=["src"]` is usually enough.
+# If `src` is itself a package, `where=["."]`. But here, `botgame` is inside `src`.
+
+[project.scripts]
+botgame-server = "botgame.server.__main__:main"
+botgame-run-match = "botgame.server.run_match:main"
+botgame-train-imitation = "botgame.training.imitation:main"
+botgame-train-rl = "botgame.training.rl_train:main"
+botgame-eval = "botgame.eval.evaluate:main"
+botgame-alphastar-imitation = "botgame.training.alphastar_imitation:main"
+botgame-alphastar-rl = "botgame.training.alphastar_rl:main"
+botgame-alphastar-league = "botgame.training.alphastar_league:main"
+botgame-report-league = "botgame.training.report_league:main"
+botgame-report-feedback-blocks = "botgame.training.report_feedback_blocks:main"

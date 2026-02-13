@@ -1,0 +1,53 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging/build
+*.egg-info/
+.eggs/
+build/
+dist/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime outputs and heavy local assets
+reports/
+artifacts/
+chrome-cdp-profile/
+playwright_profile/
+Game/
+data/processed/
+data/raw/
+data/interim/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# Archives and binaries
+*.zip
+*.7z
+*.tar
+*.gz
+paper.pdf

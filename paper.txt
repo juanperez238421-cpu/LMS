@@ -1,0 +1,1065 @@
+Article
+
+Grandmaster level in StarCraft II using
+multi-agent reinforcement learning
+
+https://doi.org/10.1038/s41586-019-1724-z                       Oriol Vinyals1,3*, Igor Babuschkin1,3, Wojciech M. Czarnecki1,3, Michaël Mathieu1,3,
+                                                                Andrew Dudzik1,3, Junyoung Chung1,3, David H. Choi1,3, Richard Powell1,3, Timo Ewalds1,3,
+Received: 30 August 2019
+                                                                Petko Georgiev1,3, Junhyuk Oh1,3, Dan Horgan1,3, Manuel Kroiss1,3, Ivo Danihelka1,3,
+Accepted: 10 October 2019                                       Aja Huang1,3, Laurent Sifre1,3, Trevor Cai1,3, John P. Agapiou1,3, Max Jaderberg1,
+                                                                Alexander S. Vezhnevets1, Rémi Leblond1, Tobias Pohlen1, Valentin Dalibard1, David Budden1,
+Published online: 30 October 2019
+                                                                Yury Sulsky1, James Molloy1, Tom L. Paine1, Caglar Gulcehre1, Ziyu Wang1, Tobias Pfaff1,
+                                                                Yuhuai Wu1, Roman Ring1, Dani Yogatama1, Dario Wünsch2, Katrina McKinney1, Oliver Smith1,
+                                                                Tom Schaul1, Timothy Lillicrap1, Koray Kavukcuoglu1, Demis Hassabis1, Chris Apps1,3 &
+                                                                David Silver1,3*
+
+
+
+                                                                Many real-world applications require artificial agents to compete and coordinate
+                                                                with other agents in complex environments. As a stepping stone to this goal, the
+                                                                domain of StarCraft has emerged as an important challenge for artificial intelligence
+                                                                research, owing to its iconic and enduring status among the most difficult
+                                                                professional esports and its relevance to the real world in terms of its raw complexity
+                                                                and multi-agent challenges. Over the course of a decade and numerous
+                                                                competitions1–3, the strongest agents have simplified important aspects of the game,
+                                                                utilized superhuman capabilities, or employed hand-crafted sub-systems4. Despite
+                                                                these advantages, no previous agent has come close to matching the overall skill of
+                                                                top StarCraft players. We chose to address the challenge of StarCraft using general-
+                                                                purpose learning methods that are in principle applicable to other complex
+                                                                domains: a multi-agent reinforcement learning algorithm that uses data from both
+                                                                human and agent games within a diverse league of continually adapting strategies
+                                                                and counter-strategies, each represented by deep neural networks5,6. We evaluated
+                                                                our agent, AlphaStar, in the full game of StarCraft II, through a series of online games
+                                                                against human players. AlphaStar was rated at Grandmaster level for all three
+                                                                StarCraft races and above 99.8% of officially ranked human players.
+
+
+
+StarCraft is a real-time strategy game in which players balance high-                              Each action at is highly structured: it selects what action type, out of
+level economic decisions with individual control of hundreds of units.                          several hundred (for example, move or build worker); who to issue that
+This domain raises important game-theoretic challenges: it features a                           action to, for any subset of the agent’s units; where to target, among
+vast space of cyclic, non-transitive strategies and counter-strate-                             locations on the map or units within the camera view; and when to
+gies; discovering novel strategies is intractable with naive self-play                          observe and act next (Fig. 1a). This representation of actions results
+exploration methods; and those strategies may not be effective when                             in approximately 1026 possible choices at each step. Similar to human
+deployed in real-world play with humans. Furthermore, StarCraft                                 players, a special action is available to move the camera view, so as to
+has a combinatorial action space, a planning horizon that extends                               gather more information.
+over thousands of real-time decisions, and imperfect information7.                                 Humans play StarCraft under physical constraints that limit their
+   Each game consists of tens of thousands of time-steps and thousands                          reaction time and the rate of their actions. The game was designed with
+of actions, selected in real-time throughout approximately ten minutes                          those limitations in mind, and removing those constraints changes the
+of gameplay. At each step t, our agent AlphaStar receives an observation                        nature of the game. We therefore chose to impose constraints upon
+ot that includes a list of all observable units and their attributes. This                      AlphaStar: it suffers from delays due to network latency and compu-
+information is imperfect; the game includes only opponent units seen                            tation time; and its actions per minute (APM) are limited, with peak
+by the player’s own units, and excludes some opponent unit attributes                           statistics substantially lower than those of humans (Figs. 2c, 3g for
+outside the camera view.                                                                        performance analysis). AlphaStar’s play with this interface and these
+
+
+
+
+1
+ DeepMind, London, UK. 2Team Liquid, Utrecht, Netherlands. 3These authors contributed equally: Oriol Vinyals, Igor Babuschkin, Wojciech M. Czarnecki, Michaël Mathieu, Andrew Dudzik,
+Junyoung Chung, David H. Choi, Richard Powell, Timo Ewalds, Petko Georgiev, Junhyuk Oh, Dan Horgan, Manuel Kroiss, Ivo Danihelka, Aja Huang, Laurent Sifre, Trevor Cai, John P. Agapiou,
+Chris Apps, David Silver. *e-mail: vinyals@google.com; davidsilver@google.com
+
+
+
+350 | Nature | Vol 575 | 14 November 2019
+a                                                                                                                 Monitoring layer                                                                                                              Fig. 1 | Training setup. a, AlphaStar observes the game
+                                                                                  Actions limit ~22 per 5 s
+                                                                                                                                                                                                                                                through an overview map and list of units. To act, the
+                                                                                                                             Requested delay ~200 ms
+                                                                                                                                                                                                                                                agent outputs what action type to issue (for example,
+                                                                                                                                                                                                                                                build), who it is applied to, where it targets, and when
+                                                                                                                          Action                                                                                                                the next action will be issued. Actions are sent to the
+                                                                                                                                                                                                                                                game through a monitoring layer that limits action
+                                                                                                                           Move
+                                                                                                                           Attack                                                                                                               rate. AlphaStar contends with delays from network
+
+
+
+
+                                                                                                                                                                                                          Real-time processing delay 30 ms
+                                                      Move
+                                                                                                                           Build
+                                                                                                                                                                                                                                                latency and processing time. b, AlphaStar is trained
+                                                                                                                                                                     When next
+                                                                                                                               What?          Who?       Where?
+                                                                                                                                                                      action?
+                                                                                                                                                                                                                                                via both supervised learning and reinforcement
+    Real-time processing delay 80 ms
+
+
+
+
+                                                                                                                                                                                                                                                learning. In supervised learning (bottom), the
+                                                                                                                                                                                                                                                parameters are updated to optimize Kullback–Leibler
+                                                                                                                                                                                                                                                (KL) divergence between its output and human
+                                                                                                                                                                                                                                                actions sampled from a collection of replays. In
+                                                                                                                                                                                                                                                reinforcement learning (top), human data are used to
+                                                                                                                                                                                                                                                sample the statistic z, and agent experience is
+                                                                                                                                                                                                                                                collected to update the policy and value outputs via
+                                                                                                                                                                                                                                                reinforcement learning (TD(λ), V-trace, UPGO)
+                                                                                                                            Own units                          Minimap
+                                                                                                                                                                                                                                                combined with a KL loss towards the supervised
+                                                                                                                                                                                                                                                agent. c, Three pools of agents, each initialized by
+                                                                                                                              Camera vision   Outside camera
+                                                                                                                                                                                                                                                supervised learning, were subsequently trained with
+                                                                                                                            Opponents units
+                                                                                                                                                                                                                                                reinforcement learning. As they train, these agents
+                                                                                                                                                     ?                                                                                          intermittently add copies of themselves—‘players’
+                                                                                                                              Camera vision   Outside camera
+                                                                                                                                                                                                                                                that are frozen at a specific point—to the league. The
+                                                                                                                                                                                                                                                main agents train against all of these past players, as
+                                                                                                                                                                                                                                                well as themselves. The league exploiters train against
+                                                                                                                                                                                                                                                all past players. The main exploiters train against the
+b                                            Reinforcement learning
+                                                                                                c Supervised players                            Past players               Current players
+                                                                                                                                                                                                                                                main agents. Main exploiters and league exploiters
+                                                                                                                                                                                                                                                can be reset to the supervised agent when they add a
+                                                                                                                                                                                                                                                player to the league. Images from StarCraft
+
+
+
+                                                                                                                                                                                                                                  Main agents
+                                                                                                                                                                                                                                                reproduced with permission from Blizzard
+                                                   SSL
+                                                    t              Rt
+                                                            rac
+                                                                e                                                                                                                                                                               Entertainment.
+                                                                    TD(O)
+
+
+
+
+                                                         V-T GO
+                                                 KL
+
+
+
+
+                                                          UP
+                                                   St              Vt
+                                                                                                                                                                                     Main exploiters
+                                                                                                     Human data
+
+
+
+
+                                                                            o′t   ∑rt+k
+
+
+                                                              ot
+
+
+                                                        rp                        t   rp
+                                       Rewards                                             rT = ±1
+                                                                                                                                                                                     League exploiters
+
+
+
+
+              Opponent
+      Agent
+Human                                    z
+
+                                              Supervised learning
+                                                             at
+                                                              KL
+
+
+
+
+                                                         SSL
+                                                          t                                                                                          Time
+
+                                                                                                                                                            Matchmaking target                           Zerg
+                                                                                                                                                            Reinforcement learning                       Terran
+                                                                                                                                                            Supervised learning                          Protoss
+                                                        ot                                                                                                  Reinitialization
+
+                                        Human                 t
+                                                                            z
+
+
+
+constraints was approved by a professional player (see ‘Professional                                                                                                player and opponent units are processed using a self-attention mecha-
+player statement’ in Methods).                                                                                                                                      nism8. To integrate spatial and non-spatial information, we introduce
+                                                                                                                                                                    scatter connections. To deal with partial observability, the tempo-
+                                                                                                                                                                    ral sequence of observations is processed by a deep long short-term
+Learning algorithm                                                                                                                                                  memory (LSTM) system9. To manage the structured, combinatorial
+To address the complexity and game-theoretic challenges of StarCraft,                                                                                               action space, the agent uses an auto-regressive policy7,10,11 and recurrent
+AlphaStar uses a combination of new and existing general-purpose                                                                                                    pointer network12. Extended Data Fig. 3 summarizes the architecture
+techniques for neural network architectures, imitation learning, rein-                                                                                              and Fig. 3f shows an ablation of each component.
+forcement learning, and multi-agent learning. Further details about                                                                                                   Agent parameters were initially trained by supervised learning.
+these techniques are given in the Methods.                                                                                                                          Games were sampled from a publicly available dataset of anonymized
+   Central to AlphaStar is a policy πθ(a t | st , z) = ℙ[a t | st , z ], represented                                                                                human replays. The policy was then trained to predict each action at,
+by a neural network with parameters θ that receives all observations                                                                                                conditioned either solely on st, or also on z. This results in a diverse set
+st = (o1:t, a1:t − 1) from the start of the game as inputs, and selects actions                                                                                     of strategies that reflects the modes of human play.
+as outputs. The policy is also conditioned on a statistic z that summa-                                                                                               The agent parameters were subsequently trained by a reinforcement
+rizes a strategy sampled from human data (for example, a build order).                                                                                              learning algorithm that is designed to maximize the win rate (that is,
+   Our agent architecture consists of general-purpose neural network                                                                                                compute a best response) against a mixture of opponents. The choice
+components that handle StarCraft’s raw complexity. Observations of                                                                                                  of opponent is determined by a multi-agent procedure, described
+
+
+                                                                                                                                                                                                                                                   Nature | Vol 575 | 14 November 2019 | 351
+Article
+                            a                 7,000
+                                                                    7,000
+                                                                                       AlphaStar Final
+                                              6,000                 6,500                                                                                                                                       AlphaStar Final
+                                                                                                                                                                                                                AlphaStar Mid
+                                                                    6,000                   AlphaStar Mid
+                                              5,000
+                                                                    5,500
+                                                                                                          Master                                GM
+                                              4,000                 5,000
+
+
+
+
+                               MMR
+                                                                        98.5                98.9      99.2                         99.6         100.0                                                           AlphaStar Supervised
+
+                                              3,000
+
+
+
+
+                                                                                                                                                                                                                       Grandmaster
+                                              2,000
+
+
+
+
+                                                                                                                                                                                 Diamond
+                                                                                                                                                 Platinum
+                                                          Bronze
+
+
+
+
+                                                                                                                                                                                                   Master
+                                                                             Silver
+
+
+
+
+                                                                                                               Gold
+                                              1,000
+
+                                                 0
+                                                      0                                     25                                     50                                 75                                100
+                                                                                                                               Percentile
+
+                             b                                     Opponent race                      c
+                                                                                                                                           Terran                           Protoss                                  Zerg
+                                                                                                                        0.05
+                                                                                                                                           Avg 99.9% Max                    Avg 99.9% Max                             Avg 99.9% Max
+                                                                                                                        0.04               183 487 571                      187 503 587                               211 655 823
+                                                                                                                                           174 671 873                      165 739 1,814                             205 1,259 4,166
+
+
+
+
+                                                                                                          Probability
+                                                          6,275 6,196                 –      6,297                      0.03
+                                                          99.93%    99.91%             –     99.94%
+                                                           25/30     11/14            4/4     10/12
+                             AlphaStar race
+
+
+
+
+                                                                                                                        0.02
+                                                          6,048 5,991 6,209                  5,971
+                                                          99.86%    99.83%       99.92%      99.82%                     0.01
+                                                           18/30      4/8          4/7        10/15
+
+                                                                                                                          0
+                                                          5,835 5,755 5,531                  6,500                             0          300    600        900   0        300             600   900        0       300              600   900
+                                                          99.76%     99.7%       99.51%      99.96%
+                                                           18/30      8/14        5/10         5/6                                          EPM                              EPM                                       EPM
+
+Fig. 2 | Results. a, On Battle.net, StarCraft II players are divided into seven                                                                  bottom: Protoss, Terran, Zerg) versus opponents encountered on Battle.net
+leagues, from Bronze to Grandmaster, according to their ratings (MMR). We                                                                        (from left to right: all races combined, Protoss, Terran, Zerg). Note that
+played three variants of AlphaStar on Battle.net: AlphaStar Supervised,                                                                          per-race data are limited; AlphaStar won all Protoss versus Terran games.
+AlphaStar Mid, and AlphaStar Final. The supervised agent was rated in the top                                                                    c, Distribution of effective actions per minute (EPM) as reported by StarCraft II
+16% of human players, the midpoint agent within the top 0.5%, and the final                                                                      for both AlphaStar Final (blue) and human players (red). Dashed lines show
+agent, on average, within the top 0.15%, achieving a Grandmaster level rating                                                                    mean values. Icons reproduced with permission from Blizzard Entertainment.
+for all three races. b, MMR ratings of AlphaStar Final per race (from top to
+
+
+
+
+below. AlphaStar’s reinforcement learning algorithm is based on a                                                                                   To address the game-theoretic challenges, we introduce league train-
+policy gradient algorithm similar to advantage actor–critic13. Updates                                                                           ing, an algorithm for multi-agent reinforcement learning (Fig. 1b, c).
+were applied asynchronously14 on replayed experiences15. This requires                                                                           Self-play algorithms, similar to those used in chess and Go18, learn rap-
+an approach known as off-policy learning5, that is, updating the current                                                                         idly but may chase cycles (for example, where A defeats B, and B defeats
+policy from experience generated by a previous policy. Our solution is                                                                           C, but A loses to C) indefinitely without making progress19. Fictitious
+motivated by the observation that, in large action spaces, the current                                                                           self-play (FSP)20–22 avoids cycles by computing a best response against
+and previous policies are highly unlikely to match over many steps.                                                                              a uniform mixture of all previous policies; the mixture converges to
+We therefore use a combination of techniques that can learn effec-                                                                               a Nash equilibrium in two-player zero-sum games20. We extend this
+tively despite the mismatch: temporal difference learning (TD(λ))16,                                                                             approach to compute a best response against a non-uniform mixture
+clipped importance sampling (V-trace)14, and a new self-imitation17 algo-                                                                        of opponents. This league of potential opponents includes a diverse
+rithm (UPGO) that moves the policy towards trajectories with better-                                                                             range of agents (Fig. 4d), as well as their policies from both current
+than-average reward. To reduce variance, during training only, the value                                                                         and previous iterations. At each iteration, each agent plays games
+function is estimated using information from both the player’s and the                                                                           against opponents sampled from a mixture policy specific to that agent.
+opponent’s perspectives. Figure 3i, k analyses the relative importance                                                                           The parameters of the agent are updated from the outcomes of those
+of these components.                                                                                                                             games by the actor–critic reinforcement learning procedure described
+   One of the main challenges in StarCraft is to discover novel strategies.                                                                      above.
+Consider a policy that has learned to build and utilize the micro-tactics                                                                           The league consists of three distinct types of agent, differing primarily
+of ground units. Any deviation that builds and naively uses air units will                                                                       in their mechanism for selecting the opponent mixture. First, the main
+reduce performance. It is highly improbable that naive exploration will                                                                          agents utilize a prioritized fictitious self-play (PFSP) mechanism that
+execute a precise sequence of instructions, over thousands of steps,                                                                             adapts the mixture probabilities proportionally to the win rate of each
+that constructs air units and effectively utilizes their micro-tactics.                                                                          opponent against the agent; this provides our agent with more opportu-
+To address this issue, and to encourage robust behaviour against                                                                                 nities to overcome the most problematic opponents. With fixed prob-
+likely human play, we utilize human data. Each agent is initialized                                                                              ability, a main agent is selected as an opponent; this recovers the rapid
+to the parameters of the supervised learning agent. Subsequently,                                                                                learning of self-play (Fig. 3c). Second, main exploiter agents play only
+during reinforcement learning, we either condition the agent on a                                                                                against the current iteration of main agents. Their purpose is to iden-
+statistic z, in which case agents receive a reward for following the                                                                             tify potential exploits in the main agents; the main agents are thereby
+strategy corresponding to z, or train the agent unconditionally, in                                                                              encouraged to address their weaknesses. Third, league exploiter agents
+which case the agent is free to choose its own strategy. Agents also                                                                             use a similar PFSP mechanism to the main agents, but are not targeted
+receive a penalty whenever their action probabilities differ from                                                                                by main exploiter agents. Their purpose is to find systemic weaknesses
+the supervised policy. This human exploration ensures that a wide                                                                                of the entire league. Both main exploiters and league exploiters are
+variety of relevant modes of play continue to be explored through-                                                                               periodically reinitialized to encourage more diversity and may rapidly
+out training. Figure 3e shows the importance of human data in                                                                                    discover specialist strategies that are not necessarily robust against
+AlphaStar.                                                                                                                                       exploitation. Figure 3b analyses the choice of agents within the league.
+
+
+352 | Nature | Vol 575 | 14 November 2019
+a League composition                                                              b League composition                                                          Fig. 3 | Ablations for key components of AlphaStar.
+    + League exploiters                                           1,824               + League exploiters                               62%                     These experiments use a simplified setup: one map
+      + Main exploiters                                     1,693                       + Main exploiters                   35%                                 (Kairos Junction), one race match-up (Protoss versus
+           Main agents                                    1,540                              Main agents        6%                                              Protoss), reinforcement learning and league
+                            0          600      1,200       1,800         2,400                             0        25           50          75          100   experiments limited to 1010 steps, only main agents,
+                                              Test Elo                                                          Relative population performance (%)
+                                                                                                                                                                and a 50%–50% mix of self-play and PFSP, unless
+c Multi-agent learning                                                            d Multi-agent learning
+                                                                                                                                                                stated otherwise (see Methods). The first column
+            pFSP + SP                                     1,540                               pFSP + SP                                       71%
+                                                                                                                                                                shows Elo ratings24 against ablation test agents (each
+                     SP                                   1,519                                       SP                         46%
+                                                                                                                                                                rating was estimated with 11,000 full games of
+                  pFSP                              1,273                                          pFSP                                       70%
+                                                                                                                                                                StarCraft II). a, b, Comparing different league
+                    FSP                          1,143                                               FSP                                      69%
+                                                                                                                                                                compositions using Elo of the main agents (a) and
+                            0          600      1,200       1,800         2,400                             0        25           50          75          100
+                                              Test Elo                                                                Min win rate vs past (%)                  relative population performance of the whole
+e Human data usage                                                                f Architectures                                                               leagues (b), which measures exploitability. c, d,
+          + Statistics z                                  1,540                     + Scatter connections                                      87%              Comparing different multi-agent learning algorithms
+       + Supervised KL                                  1,400                              + Transformer                                      71%
+                                                                                                                                                                using Elo (c) and a proxy for forgetting: the minimum
+            Human init                         1,020                                    + Pointer network                   36%
+                                                                                                                                                                win rate against all past versions, averaged over time
+            Supervised                        936                                         + Action delays       7%
+                                                                                                                                                                (d). Naive self-play has a high Elo, but is more
+        No human data           149                                                              Baseline 0%
+                                                                                                                                                                forgetful. See Extended Data Fig. 5 for more in-depth
+                            0          600      1,200       1,800         2,400                             0        25           50          75          100
+                                              Test Elo                                                          Supervised win rate vs elite bot (%)            comparison. e, Ablation study of the different
+g APM limits                                                                      h Interface                                                                   mechanisms to use human data. Human init,
+          No APM limit                                  1,392                       Non-camera interface                                            96%         supervised learning initialization of parameters of
+       200% APM limit                                   1,411                           Camera interface                                       87%              the neural network. g, APM limits relative to those
+       100% APM limit                                     1,540                                             0        25           50          75
+                                                                                                                Supervised win rate vs elite bot (%)
+                                                                                                                                                          100
+                                                                                                                                                                used in AlphaStar. Reducing APM substantially
+        50% APM limit                                     1,536                                                                                                 reduces performance. Unexpectedly, increasing APM
+        25% APM limit                                   1,419                     i Off-policy learning                                                         also reduces performance, possibly because the
+        10% APM limit                            1,145                                           + UPGO                                             82%
+                                                                                                                                                                agent spends more effort on refining micro-tactics
+         0% APM limit 0                                                                           + TD(λ)                                      73%
+                                                                                                                                                                than on learning diverse strategies. f, h, Comparison
+                            0          600      1,200       1,800         2,400                  V-Trace                          49%
+                                              Test Elo
+                                                                                                                                                                of architectures using the win rate of supervised
+                                                                                                            0        25           50          75          100
+                                                                                                                                                                agents (trained in Protoss versus all) against the built-
+j Bots baselines                                                                                                          Avg. win rate (%)
+                                                                                                                                                                in elite bot. j, Elo scores of StarCraft II built-in bots.
+       Built-in elite bot               603                                       k Value function
+                                                                                                                                                                Ratings are anchored by a bot that never acts. i, k,
+  Built-in very easy bot              418                                              With opponent info                                           82%
+                                                                                                                                                                Reinforcement learning ablations, measured by
+                 No-op 0                                                            Without opponent info            22%
+                                                                                                                                                                training a best response against fixed opponents to
+                            0          600      1,200       1,800         2,400                             0        25           50          75          100
+                                              Test Elo                                                                    Avg. win rate (%)                     avoid multi-agent dynamics.
+
+
+  In StarCraft, each player chooses one of three races—Terran, Protoss                                                    of human players and shows the effectiveness of supervised
+or Zerg—each with distinct mechanics. We trained the league using                                                         learning.
+three main agents (one for each StarCraft race), three main exploiter                                                       To further analyse AlphaStar we also ran several internal ablations
+agents (one for each race), and six league exploiter agents (two for                                                      (Fig. 3) and evaluations (Fig. 4). For multi-agent dynamics, we ran a
+each race). Each agent was trained using 32 third-generation tensor                                                       round-robin tournament of all players throughout league training
+processing units (TPUs23) over 44 days. During league training almost                                                     and a second tournament of main agents against held-out validation
+900 distinct players were created.                                                                                        agents trained to follow specific human strategies. The main agent
+                                                                                                                          performance improved steadily across all three races. The perfor-
+                                                                                                                          mance of the main exploiters actually reduced over time and main
+Empirical evaluation                                                                                                      agents performed better against the held-out validation agents, both
+We evaluated the three main Terran, Protoss and Zerg AlphaStar agents                                                     of which suggest that the main agent grew increasingly robust. The
+using the unconditional policy on the official online matchmaking                                                         league Nash equilibrium over all players at each point in time assigns
+system Battle.net. Each agent was assessed at three different snapshots                                                   small probabilities to players from previous iterations, suggesting
+during training: after supervised training only (AlphaStar Supervised),                                                   that the learning algorithm does not cycle or regress. Finally, the unit
+after 27 days of league training (AlphaStar Mid), and after 44 days of                                                    composition changed throughout league training, which indicates a
+league training (AlphaStar Final). AlphaStar Supervised and AlphaStar                                                     diverse strategic progression.
+Mid were evaluated starting from an unranked rating on Battle.net
+for 30 and 60 games, respectively, for each race; AlphaStar Final was
+evaluated from AlphaStar Mid’s rating for an additional 30 games for                                                      Conclusion
+each race. The Battle.net matchmaking procedure selected maps and                                                         AlphaStar is the first agent to achieve Grandmaster level in
+opponents. Matches were played under blind conditions: AlphaStar                                                          StarCraft II, and the first to reach the highest league of human players
+was not provided with the opponent’s identity, and played under an                                                        in a widespread professional esport without simplification of the
+anonymous account. These conditions were selected to estimate                                                             game. Like StarCraft, real-world domains such as personal assistants,
+AlphaStar’s strength under approximately stationary conditions,                                                           self-driving cars, or robotics require real-time decisions, over com-
+but do not directly measure its susceptibility to exploitation under                                                      binatorial or structured action spaces, given imperfectly observed
+repeated play.                                                                                                            information. Furthermore, similar to StarCraft, many applications
+  AlphaStar Final achieved ratings of 6,275 Match Making Rating                                                           have complex strategy spaces that contain cycles or hard explora-
+(MMR) for Protoss, 6,048 MMR for Terran and 5,835 MMR for Zerg,                                                           tion landscapes, and agents may encounter unexpected strategies
+placing it above 99.8% of ranked human players, and at Grandmas-                                                          or complex edge cases when deployed in the real world. The success
+ter level for all three races (Fig. 2a, Extended Data Fig. 7 (analysis),                                                  of AlphaStar in StarCraft II suggests that general-purpose machine
+Supplementary Data, Replays (game replays)). AlphaStar Super-                                                             learning algorithms may have a substantial effect on complex
+vised reached an average rating of 3,699, which places it above 84%                                                       real-world problems.
+
+
+                                                                                                                                                                   Nature | Vol 575 | 14 November 2019 | 353
+Article
+a                                                                                                                                                                                                Fig. 4 | AlphaStar training progression. a, Training
+                                                             AlphaStar                              AlphaStar                                               AlphaStar
+                                    1,600                                                                                                                                                        Elo scores of agents in the league during the 44 days
+                                                             Supervised                                  Mid                                                    Final
+                                                                                                                                                                                                 of training. Each point represents a past player,
+                                    1,400                                                                                                                               Main agents
+                                                                                                                                                                                                 evaluated against the entire league and the elite
+                                    1,200                                                                                                                                                        built-in bot (whose Elo is set to 0). b, Proportion of
+                                                                                                                                                                        League exploiters
+                                                                                                                                                                                                 validation agents that beat the main agents in more
+                                    1,000
+      Training Elo
+
+
+
+
+                                                                                                                                                                                                 than 80 out of 160 games. This value increased
+                                                   800                                                                                                                                           steadily over time, which shows the robustness of
+                                                                                                                                                                        Main exploiters
+                                                                                                                                                                                                 league training to unseen strategies. c, The Nash
+                                                   600
+                                                                                                                                                                                                 distribution (mixture of the least exploitable
+                                                   400                                                                                                                                           players) of the players in the league, as training
+                                                   200                                                                                                                  Supervised agent         progressed. It puts the most weight on recent
+                                                                                                                                                                                                 players, suggesting that the latest strategies largely
+                                                    0                                                                                                                   Elite built-in bot
+                                                                                                                                                                                                 dominate earlier ones, without much forgetting or
+                                                         0                     10                20                   30                                40
+                                                                                                                                                                                                 cycling. For example, player 40 was part of the Nash
+                                                                                                 Training days
+                                                                                                                                                                                                 distribution from its creation at day 20 until 5 days
+b                                                                                                                                       c                                                        later, when it was completely dominated by newer
+                                                   100                                                                       Terran
+                Validation strategies beaten (%)
+
+
+
+
+                                                                                                                             Protoss
+                                                                                                                                                       80                                        agents. d, Average number of each unit built by the
+                                                                                                                             Zerg
+                                                    80                                                                                                 70                                        Protoss agents over the course of league training,
+                                                                                                                                                       60                                        normalized by the most common unit. Unlike the
+
+
+
+                                                                                                                                       Main agent ID
+                                                    60                                                                                                 50                                        main agents, the exploiters rapidly explore different
+                                                                                                                                                       40                                        unit compositions. Worker units have been removed
+                                                    40
+                                                                                                                                                       30                                        for clarity.
+                                                                                                                                                       20
+                                                    20
+                                                             AlphaStar               AlphaStar                   AlphaStar                             10
+                                                             Supervised                   Mid                        Final                              0
+                                                     0
+                                                         0                10         20           30             40                                         0    10      20     30      40
+                                                                                    Training days                                                                     Training days
+
+
+d                                                                  Main agents          League exploiters 1           League exploiters 2                               Main exploiters
+                                   Adept
+                            Carrier
+           Colossus
+Dark Templar
+           Disruptor
+High Templar
+             Immortal
+      Mothership
+           Observer
+                              Oracle
+                Phoenix
+                              Sentry
+                         Stalker
+             Tempest
+            Void Ray
+     Warp Prism
+                                 Zealot
+
+                                                               Number of agents          Number of agents              Number of agents                               Number of agents
+                                                                 in the league             in the league                 in the league                                  in the league
+
+
+
+                                                                                                                                                                13. Mnih, V. et al. Asynchronous methods for deep reinforcement learning. Proc. Machine
+Online content                                                                                                                                                      Learning Res. 48, 1928–1937 (2016).
+Any methods, additional references, Nature Research reporting sum-                                                                                              14. Espeholt, L. et al. IMPALA: scalable distributed deep-RL with importance
+                                                                                                                                                                    weighted actor-learner architectures. Proc. Machine Learning Res. 80, 1407–1416
+maries, source data, extended data, supplementary information,
+                                                                                                                                                                    (2018).
+acknowledgements, peer review information; details of author con-                                                                                               15. Wang, Z. et al. Sample efficient actor-critic with experience replay. Preprint at https://
+tributions and competing interests; and statements of data and code                                                                                                 arxiv.org/abs/1611.01224v2 (2017).
+                                                                                                                                                                16. Sutton, R. Learning to predict by the method of temporal differences. Mach. Learn. 3,
+availability are available at https://doi.org/10.1038/s41586-019-1724-z.
+                                                                                                                                                                    9–44 (1988).
+                                                                                                                                                                17. Oh, J., Guo, Y., Singh, S. & Lee, H. Self-Imitation Learning. Proc. Machine Learning Res. 80,
+1.              AIIDE StarCraft AI Competition. https://www.cs.mun.ca/dchurchill/starcraftaicomp/.                                                                  3875–3884 (2018).
+2.              Student StarCraft AI Tournament and Ladder. https://sscaitournament.com/.                                                                       18. Silver, D. et al. A general reinforcement learning algorithm that masters chess, shogi, and
+3.              Starcraft 2 AI ladder. https://sc2ai.net/.                                                                                                          Go through self-play. Science 362, 1140–1144 (2018).
+4.              Churchill, D., Lin, Z. & Synnaeve, G. An analysis of model-based heuristic search                                                               19. Balduzzi, D. et al. Open-ended learning in symmetric zero-sum games. Proc. Machine
+                techniques for StarCraft combat scenarios. in Artificial Intelligence and Interactive Digital                                                       Learning Res. 97, 434–443 (2019).
+                Entertainment Conf. (AAAI, 2017).                                                                                                               20. Brown, G. W. Iterative solution of games by fictitious play. Act. Anal. Prod. Alloc. 13,
+5.              Sutton, R. & Barto, A. Reinforcement Learning: An Introduction (MIT Press, 1998).                                                                   374–376 (1951).
+6.              LeCun, Y., Bengio, Y. & Hinton, G. Deep learning. Nature 521, 436–444 (2015).                                                                   21. Leslie, D. S. & Collins, E. J. Generalised weakened fictitious play. Games Econ. Behav. 56,
+7.              Vinyals, O. et al. StarCraft II: a new challenge for reinforcement learning. Preprint at                                                            285–298 (2006).
+                https://arxiv.org/abs/1708.04782 (2017).                                                                                                        22. Heinrich, J., Lanctot, M. & Silver, D. Fictitious self-play in extensive-form games. Proc. Intl
+8.              Vaswani, A. et al. Attention is all you need. Adv. Neural Information Process. Syst. 30,                                                            Conf. Machine Learning 32, 805–813 (2015).
+                5998–6008 (2017).                                                                                                                               23. Jouppi, N. P. et al. In-datacenter performance analysis of a tensor processing unit.
+9.              Hochreiter, S. & Schmidhuber, J. Long short-term memory. Neural Comput. 9, 1735–1780                                                                Preprint at https://arxiv.org/abs/1704.04760v1 (2017).
+                (1997).                                                                                                                                         24. Elo, A. E. The Rating of Chessplayers, Past and Present (Arco, 2017).
+10.             Mikolov, T., Karafiat, M., Burget, L., Cernocky, J. & Khudanpur, S. Recurrent neural network
+                based language model. INTERSPEECH-2010 1045–1048 (2010).
+11.             Metz, L., Ibarz, J., Jaitly, N. & Davidson, J. Discrete sequential prediction of continuous                                                     Publisher’s note Springer Nature remains neutral with regard to jurisdictional claims in
+                actions for deep RL. Preprint at https://arxiv.org/abs/1705.05035v3 (2017).                                                                     published maps and institutional affiliations.
+12.             Vinyals, O., Fortunato, M. & Jaitly, N. Pointer networks. Adv. Neural Information Process.
+                Syst. 28, 2692–2700 (2015).                                                                                                                     © The Author(s), under exclusive licence to Springer Nature Limited 2019
+
+
+
+354 | Nature | Vol 575 | 14 November 2019
+Methods
+                                                                            Related work
+Game and interface                                                          Games have been a focus of artificial intelligence research for decades
+Game environment. StarCraft is a real-time strategy game that takes         as a stepping stone towards more general applications. Classic board
+place in a science fiction universe. The franchise, from Blizzard Enter-    games such as chess25 and Go26 have been mastered using general-
+tainment, comprises StarCraft: Brood War and StarCraft II. In this paper,   purpose reinforcement learning and planning algorithms18. Reinforce-
+we used StarCraft II. Since StarCraft was released in 1998, there has       ment learning methods have achieved substantial successes in video
+been a strong competitive community with tens of millions of dollars        games such as those on the Atari platform27, Super Mario Bros28, Quake
+of prize money. The most common competitive setting of StarCraft            III Arena Capture the Flag29, and Dota 230.
+II is 1v1, where each player chooses one of the three available races—          Real-time strategy (RTS) games are recognized for their game-
+Terran, Protoss, and Zerg—which all have distinct units and buildings,      theoretic and domain complexities31. Many sub-problems of RTS games,
+exhibit different mechanics, and necessitate different strategies when      for example, micromanagement, base economy, or build order opti-
+playing for and against. There is also a Random race, where the game        mization, have been studied in depth7,32–35, often in small-scale envi-
+selects the player’s race at random. Players begin with a small base and    ronments36,37. For the combined challenge, the StarCraft domain has
+a few worker units, which gather resources to build additional units        emerged by consensus as a research focus1,7. StarCraft: Brood War has
+and buildings, scout the opponent, and research new technologies. A         an active competitive AI research community38, and most bots com-
+player is defeated if they lose all buildings.                              bine rule-based heuristics with other AI techniques such as search4,39,
+    There is no universally accepted notion of fairness in real-time        data-driven build-order selection40, and simulation41. Reinforcement
+human–computer matches, so our match conditions, interface, camera          learning has also been studied to control units in the game7,34,42–44,
+view, action rate limits, and delays were developed in consultation with    and imitation learning has been proposed to learn unit and building
+professional StarCraft II players and Blizzard employees. AlphaStar’s       compositions45. Most recently, deep learning has been used to predict
+play under these conditions was professional-player approved (see the       future game states46. StarCraft II similarly has an active bot community3
+Professional Player Statement, below). At each agent step, the policy       since the release of a public application programming interface (API)7.
+receives an observation ot and issues an action at (Extended Data           No StarCraft bots have defeated professional players, or even high-level
+Tables 1, 2) through the game interface. There can be several game          casual players47, and the most successful bots have used superhuman
+time-steps (each 45 ms) per agent step.                                     capabilities, such as executing tens of thousands of APM or viewing
+                                                                            the entire map at once. These capabilities make comparisons against
+Camera view. Humans play StarCraft through a screen that displays           humans hard, and invalidate certain strategies. Some of the most recent
+only part of the map along with a high-level view of the entire map         approaches use reinforcement learning to play the full game, with
+(to avoid information overload, for example). The agent interacts with      hand-crafted, high-level actions48, or rule-based systems with machine
+the game through a similar camera-like interface, which naturally im-       learning incrementally replacing components43. By contrast, AlphaStar
+poses an economy of attention, so that the agent chooses which area         uses a model-free, end-to-end learning approach to playing StarCraft
+it fully sees and interacts with. The agent can move the camera as an       II that sidesteps the difficulties of search-based methods that result
+action.                                                                     from imperfect models, and is applicable to any domain that shares
+   Opponent units outside the camera have certain information hidden,       some of the challenges present in StarCraft.
+and the agent can only target within the camera for certain actions (for        Dota 2 is a modern competitive team game that shares some com-
+example, building structures). AlphaStar can target locations more          plexities of RTS games such as StarCraft (including imperfect informa-
+accurately than humans outside the camera, although less accurately         tion and large time horizons). Recently, OpenAI Five defeated a team
+within it because target locations (selected on a 256 × 256 grid) are       of professional Dota 2 players and 99.4% of online players30. The hero
+treated the same inside and outside the camera. Agents can also select      units of OpenAI Five are controlled by a team of agents, trained together
+sets of units anywhere, which humans can do less flexibly using control     with a scaled up version of PPO49, based on handcrafted rewards. How-
+groups. In practice, the agent does not seem to exploit these extra         ever, unlike AlphaStar, some game rules were simplified, players were
+capabilities (see the Professional Player Statement, below), because of     restricted to a subset of heroes, agents used hard-coded sub-systems
+the human prior. Ablation data in Fig. 3h shows that using this camera      for certain aspects of the game, and agents did not limit their percep-
+view reduces performance.                                                   tion to a camera view.
+                                                                                AlphaStar relies on imitation learning combined with reinforcement
+APM limits. Humans are physically limited in the number of actions          learning, which has been used several times in the past. Similarly to the
+per minute (APM) they can execute. Our agent has a monitoring layer         training pipeline of AlphaStar, the original AlphaGo initialized a policy
+that enforces APM limitations. This introduces an action economy that       network by supervised learning from human games, which was then
+requires actions to be prioritized. Agents are limited to executing at      used as a prior in Monte-Carlo tree search26. Similar to our statistic z,
+most 22 non-duplicate actions per 5-s window. Converting between            other work attempted to train reward functions from human prefer-
+actions and the APM measured by the game is non-trivial, and agent ac-      ences and use them to guide reinforcement learning50,51 or learned
+tions are hard to compare with human actions (computers can precisely       goals from human intervention52.
+execute different actions from step to step). See Fig. 2c and Extended          Related to the league, recent progress in multi-agent research has led
+Data Fig. 1 for APM details.                                                to agents performing at human level in the Capture the Flag team mode
+                                                                            of Quake III Arena29. These results were obtained using population-
+Delays. Humans are limited in how quickly they react to new informa-        based training of several agents competing with each other, which
+tion; AlphaStar has two sources of delays. First, in real-time evaluation   used pseudo-reward evolution to deal with the hard credit assignment
+(not training), AlphaStar has a delay of about 110 ms between when a        problem. Similarly, the Policy Space Response Oracle framework53 is
+frame is observed and when an action is executed, owing to latency,         related to league training, although league training specifies unique
+observation processing, and inference. Second, because agents               targets for approximate best responses (that is, PFSP and exploiters).
+decide ahead of time when to observe next (on average 370 ms,
+but possibly multiple seconds), they may react late to unexpected           Architecture
+situations. The distribution of these delays is shown in Extended           The policy of AlphaStar is a function πθ(at | st,z) that maps all previous
+Data Fig. 2.                                                                observations and actions st = o1:t, a1:t − 1 (defined in Extended Data Tables 1, 2)
+Article
+and z (representing strategy statistics) to a probability distribution
+over actions at for the current step. πθ is implemented as a deep neural     Exploration and diversity. We use human data to aid in exploration
+network with the following structure.                                        and to preserve strategic diversity throughout training. First, we
+   The observations ot are encoded into vector representations,              initialize the policy parameters to the supervised policy and continu-
+combined, and processed by a deep LSTM 9, which maintains                    ally minimize the KL divergence between the supervised and current
+memory between steps. The action arguments at are sampled auto-              policy59,60. Second, we train the main agents with pseudo-rewards to
+regressively10, conditioned on the outputs of the LSTM and the observa-      follow a strategy statistic z, which we randomly sample from human
+tion encoders. There is a value function for each of the possible rewards    data. These pseudo-rewards measure the edit distance between sam-
+(see Reinforcement learning).                                                pled and executed build orders, and the Hamming distance between
+   Architecture components were chosen and tuned with respect to             sampled and executed cumulative statistics (see Supplementary Data,
+their performance in supervised learning, and include many recent            Detailed Architecture). Each type of pseudo-reward is active (that is,
+advances in deep learning architectures7,8,12,54,55. A high-level overview   non-zero) with probability 25%, and separate value functions and losses
+of the agent architecture is given in Extended Data Fig. 3, with more        are computed for each pseudo-reward. We found our use of human
+detailed descriptions in Supplementary Data, Detailed Architecture.          data to be critical in achieving good performance with reinforcement
+AlphaStar has 139 million weights, but only 55 million weights are           learning (Fig. 3e).
+required during inference. Ablation Fig. 3f compares the impact of
+scatter connections, transformer, and pointer network.                       Value and policy updates. New trajectories are generated by actors.
+                                                                             Asynchronously, model parameters are updated by learners, using
+Supervised learning                                                          a replay buffer that stores trajectories. Because of this, AlphaStar is
+Each agent is initially trained through supervised learning on replays       subject to off-policy data, which potentially requires off-policy cor-
+to imitate human actions. Supervised learning is used both to initialize     rections. We found that existing off-policy correction methods14,61
+the agent and to maintain diverse exploration56. Because of this, the        can be inefficient in large, structured action spaces such as that used
+primary goal is to produce a diverse policy that captures StarCraft’s        for StarCraft, because distinct actions can result in similar (or even
+complexities.                                                                identical) behaviour. We addressed this by using a hybrid approach
+   We use a dataset of 971,000 replays played on StarCraft II versions       that combines off-policy corrections for the policy (which avoids
+4.8.2 to 4.8.6 by players with MMR scores (Blizzard’s metric, similar to     instability), with an uncorrected update of the value function (which
+Elo) greater than 3,500, that is, from the top 22% of players. Instruc-      introduces bias but reduces variance). Specifically, the policy is
+tions for downloading replays can be found at https://github.com/            updated using V-trace and the value estimates are updated using
+Blizzard/s2client-proto. The observations and actions are returned           TD(λ)5 (ablation in Fig. 3i). When applying V-trace to the policy in
+by the game’s raw interface (Extended Data Tables 1, 2). We train one        large action spaces, the off-policy corrections truncate the trace
+policy for each race, with the same architecture as the one used during      early; to mitigate this problem, we assume independence between
+reinforcement learning.                                                      the action type, delay, and all other arguments, and so update the
+   From each replay, we extract a statistic z that encodes each player’s     components of the policy separately. To decrease the variance of
+build order, defined as the first 20 constructed buildings and units,        the value estimates, we also use the opponent’s observations as
+and cumulative statistics, defined as the units, buildings, effects, and     input to the value functions (ablation in Fig. 3k). Note that these
+upgrades that were present during a game. We condition the policy            are used only during training, as value functions are unnecessary
+on z in both supervised and reinforcement learning, and in supervised        during evaluation.
+learning we set z to zero 10% of the time.                                      In addition to the V-trace policy update, we introduce an upgoing
+   To train the policy, at each step we input the current observations       policy update (UPGO), which updates the policy parameters in the
+and output a probability distribution over each action argument              direction of
+(Extended Data Table 2). For these arguments, we compute the KL
+divergence between human actions and the policy’s outputs, and apply                                   ρt (GUt − Vθ(st , z))∇θ logπθ(a t | st , z)
+updates using the Adam optimizer57. We also apply L2 regularization58.
+The pseudocode of the supervised training algorithm can be found             where
+in Supplementary Data, Pseudocode.
+   We further fine-tune the policy using only winning replays with MMR                          r + GUt +1
+                                                                                                                  if Q(st +1, a t +1, z) ≥ Vθ(st +1, z)
+                                                                                         GUt =  t
+above 6,200 (16,000 games). Fine-tuning improved the win rate against                             r + V ( s  , z ) otherwise
+                                                                                                t     θ t +1
+the built-in elite bot from 87% to 96% in Protoss versus Protoss games.
+The fine-tuned supervised agents were rated at 3,947 MMR for Terran,         is an upgoing return, Q(s t,a t,z) is an action-value estimate,
+3,607 MMR for Protoss and 3,544 MMR for Zerg. They are capable of
+building all units in the game, and are qualitatively diverse from game
+                                                                                     (   π (a | s , z )
+                                                                                                           )
+                                                                             ρt = min π θ (at | st , z ) , 1 is a clipped importance ratio, and πθ′ is the
+                                                                                          θ′   t   t
+
+to game (Extended Data Fig. 4).                                              policy that generated the trajectory in the actor. Similar to self-
+                                                                             imitation learning17, the idea is to update the policy from partial tra-
+Reinforcement learning                                                       jectories with better-than-expected returns by bootstrapping when
+We apply reinforcement learning to improve the performance of                the behaviour policy takes a worse-than-average action (ablation in
+AlphaStar based on agent-versus-agent games. We use the match out-           Fig. 3i). Owing to the difficulty of approximating Q(st, at, z) over the
+come (−1 on a loss, 0 on a draw and +1 on a win) as the terminal reward      large action space of StarCraft, we estimate action-values with a
+rT, without a discount to accurately reflect the true goal of winning        one-step target, Q(st, at, z) = rt + Vθ(st + 1, z).
+games. Following the actor–critic paradigm14, a value function Vθ(st, z)        The overall loss is a weighted sum of the policy and value function
+is trained to predict rt, and used to update the policy πθ(at | st, z).      losses described above, corresponding to the win-loss reward rt as well
+   StarCraft poses several challenges when viewed as a reinforcement         as pseudo-rewards based on human data, the KL divergence loss with
+learning problem: exploration is difficult, owing to domain complexity       respect to the supervised policy, and the standard entropy regulariza-
+and reward sparsity; policies need to be capable of executing diverse        tion loss13. We optimize the overall loss using Adam57. The pseudocode
+strategies throughout training; and off-policy learning is difficult,        of the reinforcement learning algorithm can be found in Supplementary
+owing to large time horizons and the complex action space.                   Data, Pseudocode.
+                                                                                 Main exploiters play against main agents. Half of the time, and if the
+Multi-agent learning                                                          current probability of winning is lower than 20%, exploiters use PFSP
+League training is a multi-agent reinforcement learning algorithm that        with fvar weighting over players created by the main agents. This forms
+is designed both to address the cycles commonly encountered during            a curriculum that facilitates learning. Otherwise there is enough learn-
+self-play training and to integrate a diverse range of strategies. During     ing signal and it plays against the current main agents. These agents
+training, we populate the league by regularly saving the parameters           are added to the league whenever all three main agents are defeated
+from our agents (that are being trained by the RL algorithm) as new           in more than 70% of games, or after a timeout of 4 × 109 steps. They
+players (which have fixed, frozen parameters). We also continuously           are then reset to the supervised parameters. Main exploiters identify
+re-evaluate the internal payoff estimation, giving agents up-to-date          weaknesses of main agents, and consequently make them more robust.
+information about their performance against all players in the league            For more details refer to the Supplementary Data, Pseudocode.
+(see evaluators in Extended Data Fig. 6).
+                                                                              Infrastructure
+Prioritized fictitious self-play. Our self-play algorithm plays games         In order to train the league, we run a large number of StarCraft II
+between the latest agents for all three races. This approach may chase        matches in parallel and update the parameters of the agents on the
+cycles in strategy space and does not work well in isolation (Fig. 3d).       basis of data from those games. To manage this, we developed a highly
+FSP20–22 avoids cycles by playing against all previous players in the         scalable training setup with different types of distributed workers.
+league. However, many games are wasted against players that are de-             For every training agent in the league, we run 16,000 concurrent
+feated in almost 100% of games. Consequently, we introduce PFSP.              StarCraft II matches and 16 actor tasks (each using a TPU v3 device
+Instead of uniformly sampling opponents in the league, we use a match-        with eight TPU cores23) to perform inference. The game instances pro-
+making mechanism to provide a good learning signal. Given a learning          gress asynchronously on preemptible CPUs (roughly equivalent to 150
+agent A, we sample the frozen opponent B from a candidate set C with          processors with 28 physical cores each), but requests for agent steps
+probability                                                                   are batched together dynamically to make efficient use of the TPU.
+                                                                              Using TPUs for batched inference provides large efficiency gains over
+                            f (ℙ[A beats B])                                  previous work14,29.
+                          ∑C∈C f (ℙ[A beats C ])                                Actors send sequences of observations, actions, and rewards over
+                                                                              the network to a central 128-core TPU learner worker, which updates
+Where f: [0, 1] → [0, ∞) is some weighting function.                          the parameters of the training agent. The received data are buffered in
+   Choosing fhard(x) = (1 − x)p makes PFSP focus on the hardest players,      memory and replayed twice. The learner worker performs large-batch
+where p ∈ ℝ + controls how entropic the resulting distribution is. As         synchronous updates. Each TPU core processes a mini-batch of four
+fhard(1) = 0, no games are played against opponents that the agent already    sequences, for a total batch size of 512. The learner processes about
+beats. By focusing on the hardest players, the agent must beat everyone       50,000 agent steps per second. The actors update their copy of the
+in the league rather than maximizing average performance, which is            parameters from the learner every 10 s.
+even more important in highly non-transitive games such as StarCraft            We instantiate 12 separate copies of this actor–learner setup: one
+(Extended Data Fig. 8), where the pursuit of the mean win rate might          main agent, one main exploiter and two league exploiter agents for
+lead to policies that are easy to exploit. This scheme is used as the         each StarCraft race. One central coordinator maintains an estimate of
+default weighting of PFSP. Consequently, on the theoretical side, one         the payoff matrix, samples new matches on request, and resets main
+can view fhard as a form of smooth approximation of max–min optimiza-         and league exploiters. Additional evaluator workers (running on the
+tion, as opposed to max–avg, which is imposed by FSP. In particular,          CPU) are used to supplement the payoff estimates. See Extended Data
+this helps with integrating information from exploits, as these are           Fig. 6 for an overview of the training setup.
+strong but rare counter strategies, and a uniform mixture would be
+able to just ignore them (Extended Data Fig. 5).                              Evaluation
+   Only playing against the hardest opponents can waste games against         AlphaStar Battle.net evaluation. AlphaStar agents were evaluated
+much stronger opponents, so PFSP also uses an alternative curriculum,         against humans on Battle.net, Blizzard’s online matchmaking system
+fvar(x) = x(1 − x), where the agent preferentially plays against opponents    based on MMR ratings, on StarCraft II balance patch 4.9.3. AlphaStar
+around its own level. We use this curriculum for main exploiters and          Final was rated at Grandmaster level, above 99.8% of human players
+struggling main agents.                                                       who were active enough in the past months to be placed into a league
+                                                                              on the European server (about 90,000 players).
+Populating the league. During training we used three agent types                 AlphaStar played only opponents who opted to participate in the
+that differ only in the distribution of opponents they train against,         experiment (the majority of players opted in)62, used an anonymous
+when they are snapshotted to create a new player, and the probability         account name, and played on four maps: Cyber Forest, Kairos Junc-
+of resetting to the supervised parameters.                                    tion, King’s Cove, and New Repugnancy. Blizzard updated the map
+   Main agents are trained with a proportion of 35% SP, 50% PFSP              pool a few weeks before testing. Instead of retraining AlphaStar, we
+against all past players in the league, and an additional 15% of PFSP         simply played on the four common maps that were kept in the pool of
+matches against forgotten main players the agent can no longer beat           seven available maps. Humans also must select at least four maps and
+and past main exploiters. If there are no forgotten players or strong         frequently play under anonymous account names. Each agent ran on
+exploiters, the 15% is used for self-play instead. Every 2 × 109 steps, a     a single high-end consumer GPU. We evaluated at three points during
+copy of the agent is added as a new player to the league. Main agents         training: supervised, midpoint, and final.
+never reset.                                                                     For the supervised and midpoint evaluations, each agent began with
+   League exploiters are trained using PFSP and their frozen copies are       a fresh, unranked account. Their MMR was updated on Battle.net as
+added to the league when they defeat all players in the league in more        for humans. The supervised and midpoint evaluations played 30 and
+than 70% of games, or after a timeout of 2 × 109 steps. At this point there   60 games, respectively. The midpoint evaluation was halted while
+is a 25% probability that the agent is reset to the supervised parameters.    still increasing because the anonymity constraint was compromised
+The intuition is that league exploiters identify global blind spots in the    after 50 games.
+league (strategies that no player in the league can beat, but that are not       For the final Battle.net evaluation, we used several accounts to par-
+necessarily robust themselves).                                               allelize the games and help to avoid identification. The MMRs of our
+Article
+accounts were seeded randomly from the distribution of combined,              between all agents in leagues A and B of sizes N and M, respectively,
+estimated, midpoint MMRs. Consequently, we no longer used the                 PAB ∈ [0, 1]N × M:
+iterative MMR estimation provided in Battle.net, and instead used                               RPP(PAB) = Nash(PAB)T PABNash(PBA)
+the underlying probabilistic model provided by Blizzard: given our
+rating r with uncertainty u, and opponent rating ri with uncertainty          where Nash(X) ∈ [0, 1]K is a vector of probabilities assigned to playing
+ui ∈ [0.1, 1.0], the probability of the outcome oi ∈ {−1, 1} is               each agent, in league X of size K, in the Nash equilibrium. High RPP
+                                                                              means that league A consists of agents that can form a mixed strategy
+             ℙ[oi = 1 r , u, ri , ui ] = 1 − ℙ[oi = − 1 r , u, ri , ui ]      that can exploit agents from league B, while not being too exploitable
+                                                        r − ri              by any mixed strategy from league B.
+                                          = Φ                      
+                                               400 2 + u + u  2 2
+                                                                 i          AlphaStar generality
+                                                r − ri                       To address the complexity and game-theoretic challenges of StarCraft,
+                                          ≈ Φ        
+                                               568                          AlphaStar uses a combination of new and existing general-purpose
+                                                                              techniques for neural network architectures, imitation learning, rein-
+where Φ is the cumulative distribution function (CDF) of a standard           forcement learning, and multi-agent learning. These techniques and
+Gaussian distribution, and where we used Battle.net’s minimum uncer-          their combination are widely applicable.
+tainties u = ui = 0.1.                                                          The neural network architecture components, including the new
+  Under independent and identically distributed (IID) assumptions             scatter connections, are all generally applicable to any domain whose
+of match results and a uniform prior over MMRs, we can compute our            observations comprise a combination of images, lists, and sets, all of
+rating as                                                                     which are present in StarCraft.
+                                                                                AlphaStar’s action space is defined as a set of functions with typed
+  argmaxℙ[r results] = argmaxℙ[results r ]U (r )                              arguments. Any domain which defines a similar API can be tackled
+     r ∈ℕ                          r ∈ℕ
+                                              N                               with the same decomposition of complex, structured action spaces,
+                             = argmax ∏ ℙ[oi r , ri ]                         whose joint probability is decomposed via the chain rule (akin to, for
+                                   r ∈ℕ      i =1                             example, language modelling10 or theorem proving).
+                                                                                Imitation learning for AlphaStar requires a large number of human
+We validated our MMR computation on the 200 most recent matches of            demonstrations to be effective, and thus is applicable only to those
+Dario ‘TLO’ Wünsch, a professional StarCraft II player, and obtained an       domains that provide such a set of demonstrations. Using a latent
+MMR estimate of 6,334; the average MMR reported by Battle.net was 6,336.      variable z to induce exploration is not specific to StarCraft, but the
+                                                                              particular choice of statistics required domain knowledge. In particular,
+StarCraft demonstration evaluation. In December 2018, we played               we chose z to encode openings and units in StarCraft. Pseudo-rewards
+two five-game series against StarCraft II professional players Grzegorz       were based on appropriate distance metrics for these statistics, such
+‘MaNa’ Komincz and Dario ‘TLO’ Wünsch, although TLO did not play the          as edit distance or Hamming distance.
+same StarCraft II race that he plays professionally. These games took           AlphaStar’s underlying reinforcement learning algorithm can
+place with a different, preliminary version of AlphaStar63. In particu-       be applied to any reinforcement learning environment. The use of
+lar, the agent did not have a limited camera, was less restricted in how      an opponent’s observations for a lower-variance baseline and new
+often it could act, and played for and against a single StarCraft II race     components, such as hybrid off-policy learning, UPGO, and distillation
+on a single map. AlphaStar won all ten games in both five-game series,        towards an imitation policy, are also widely applicable.
+although an early camera prototype lost a follow-up game against MaNa.          Last, we propose a new multi-agent training regime with different
+                                                                              kinds of exploiters whose purpose is to strengthen the main agents.
+Analysis                                                                      Together with PFSP, these are all general-purpose techniques that can
+Agent sets. For validation agents, we validated league robustness             be applied to any multiplayer domain.
+against a set of 17 strategies trained using only main agents and no
+exploiters, and fixing z to a hand-curated set of interesting strategies      Professional player statement
+(for example, a cannon rush or early flying units).                           The following quote describes our interface and limitations from
+   Ablation test agents included the validation agents, and the first (that   StarCraft II professional player Dario ‘TLO’ Wünsch (who is part of the
+is, weaker) 20 main and 20 league exploiter Protoss agents created by         team and an author of this paper).
+full league training.                                                            “The limitations that have been put in place for AlphaStar now mean
+   For fixed opponents, to evaluate our reinforcement learning algo-          that it feels very different from the initial show match in January. While
+rithms, we computed the best response against a uniform mixed strat-          AlphaStar has excellent and precise control it doesn’t feel superhuman—
+egy composed of the first ten league exploiter Protoss agents created         certainly not on a level that a human couldn’t theoretically achieve. It
+by league training.                                                           is better in some aspects than humans and then also worse in others,
+                                                                              but of course there are going to be unavoidable differences between
+Metrics used in Figures. To compute internal Elo ratings of the league,       AlphaStar and human players.
+we added the built-in bots, and used them to estimate Elo with the               I’ve had the pleasure of providing consultation to the AlphaStar team
+following model:                                                              to help ensure that DeepMind’s system does not have any unfair advan-
+                                                                              tages over human players. Overall, it feels very fair, like it is playing a
+                                              1                    r −r
+               ℙ[r1 beats r2] =            −(r1 − r 2 )/400
+                                                              ≈ Φ 1 2     ‘real’ game of StarCraft and doesn’t completely throw the balance off
+                                   1+e                             400      by having unrealistic capabilities. Now that it has limited camera view,
+                                                                              when I multi-task it doesn’t always catch everything at the same time,
+where r1 and r2 are the Elo ratings of both players. As the Elo rating has    so that aspect also feels very fair and more human-like.”
+no intrinsic absolute scale, we ground it by setting the rating of the
+built-in elite bot to 0.                                                      Reporting summary
+   RPP is the expected outcome of the meta-game between two popu-             Further information on research design is available in the Nature
+lations after they reach the Nash equilibrium19. Given a payoff matrix        Research Reporting Summary linked to this paper.
+                                                                                                     46. Synnaeve, G. et al. Forward modeling for partial observation strategy games—a StarCraft
+Data availability                                                                                        defogger. Adv. Neural Information Process. Syst. 31, 10738–10748 (2018).
+                                                                                                     47. Farooq, S. S., Oh, I.-S., Kim, M.-J. & Kim, K. J. StarCraft AI competition report. AI Mag. 37,
+All the games that AlphaStar played online can be found in the file                                      102–107 (2016).
+‘replays.zip’ in the Supplementary Data, and the raw data from the                                   48. Sun, P. et al. TStarBots: defeating the cheating level builtin AI in StarCraft II in the full
+                                                                                                         game. Preprint at https://arxiv.org/abs/1809.07193v3 (2018).
+Battle.net experiment can be found in ‘bnet.json’ in the Supplemen-                                  49. Schulman, J., Wolski, F., Dhariwal, P., Radford, A. & Klimov, O. Proximal policy optimization
+tary Data.                                                                                               algorithms. Preprint at https://arxiv.org/abs/1707.06347v2 (2017).
+                                                                                                     50. Ibarz, B. et al. Reward learning from human preferences and demonstrations in Atari. Adv.
+                                                                                                         Neural Information Process. Syst. 31, 8011–8023 (2018).
+                                                                                                     51. Nair, A., McGrew, B., Andrychowicz, M., Zaremba, W. & Abbeel, P. Overcoming
+Code availability                                                                                        exploration in reinforcement learning with demonstrations. IEEE Intl Conf. Robotics and
+The StarCraft II environment was open sourced in 2017 by Blizzard and                                    Automation 6292–6299 (2018).
+                                                                                                     52. Christiano, P. F. et al. Deep reinforcement learning from human preferences. Adv. Neural
+DeepMind7. All the human replays used for imitation learning can be                                      Information Process. Syst. 30, 4299–4307 (2017).
+found at https://github.com/Blizzard/s2client-proto. The pseudocode                                  53. Lanctot, M. et al. A unified game-theoretic approach to multiagent reinforcement
+for the supervised learning, reinforcement learning, and multi-agent                                     learning. Adv. Neural Information Process. Syst. 30, 4190–4203 (2017).
+                                                                                                     54. Perez, E., Strub, F., De Vries, H., Dumoulin, V. & Courville, A. FiLM: visual reasoning with a
+learning components of AlphaStar can be found in the file ‘pseudocode.                                   general conditioning layer. Preprint at https://arxiv.org/abs/1709.07871v2 (2018).
+zip’ in the Supplementary Data. All the neural architecture details and                              55. He, K., Zhang, X., Ren, S. & Sun, J. Deep residual learning for image recognition. Proc. IEEE
+hyper-parameters can be found in the file ‘detailed-architecture.txt’ in                                 Conf. Computer Vision and Pattern Recognition 770–778 (2016).
+                                                                                                     56. Hinton, G., Vinyals, O. & Dean, J. Distilling the knowledge in a neural network. Preprint at
+the Supplementary Data.                                                                                  https://arxiv.org/abs/1503.02531v1 (2015).
+                                                                                                     57. Kingma, D. P. & Ba, J. Adam: a method for stochastic optimization. Preprint at https://arxiv.
+25. Campbell, M., Hoane, A. & Hsu, F. Deep Blue. Artif. Intell. 134, 57–83 (2002).                       org/abs/1412.6980v9 (2014).
+26. Silver, D. et al. Mastering the game of Go with deep neural networks and tree search.            58. Bishop, C. M. Pattern Recognition and Machine Learning (Springer, 2006).
+    Nature 529, 484–489 (2016).                                                                      59. Rusu, A. A. et al. Policy distillation. Preprint at https://arxiv.org/abs/1511.06295 (2016).
+27. Mnih, V. et al. Human-level control through deep reinforcement learning. Nature 518,             60. Parisotto, E., Ba, J. & Salakhutdinov, R. Actor-mimic: deep multitask and transfer
+    529–533 (2015).                                                                                      reinforcement learning. Preprint at https://arxiv.org/abs/1511.06342 (2016).
+28. Pathak, D., Agrawal, P., Efros, A. A. & Darrell, T. Curiosity-driven exploration by self-        61. Precup, D., Sutton, R. S. & Singh, S. P. Eligibility traces for off-policy policy evaluation.
+    supervised prediction. Proc. IEEE Conf. Computer Vision Pattern Recognition Workshops                ICML ’00 Proc. 17th Intl Conf. Machine Learning 759–766 (2016).
+    16–17 (IEEE, 2017).                                                                              62. DeepMind Research on Ladder. https://starcraft2.com/en-us/news/22933138 (2019).
+29. Jaderberg, M. et al. Human-level performance in 3D multiplayer games with population-            63. Vinyals, O. et al. AlphaStar: mastering the real-time strategy game StarCraft II https://
+    based reinforcement learning. Science 364, 859–865 (2019).                                           deepmind.com/blog/article/alphastar-mastering-real-time-strategy-game-starcraft-ii
+30. OpenAI OpenAI Five. https://blog.openai.com/openai-five/ (2018).                                     (DeepMind, 2019).
+31. Buro, M. Real-time strategy games: a new AI research challenge. Intl Joint Conf. Artificial
+    Intelligence 1534–1535 (2003).
+32. Samvelyan, M. et al. The StarCraft multi-agent challenge. Intl Conf. Autonomous Agents           Acknowledgements We thank Blizzard for creating StarCraft and for their continued support
+    and MultiAgent Systems 2186–2188 (2019).                                                         of the research environment, and for enabling AlphaStar to participate in Battle.net. In
+33. Zambaldi, V. et al. Relational deep reinforcement learning. Preprint at https://arxiv.org/       particular, we thank A. Hudelson, C. Lee, K. Calderone, and T. Morten. We also thank StarCraft
+    abs/1806.01830v2 (2018).                                                                         II professional players G. ‘MaNa’ Komincz and D. ‘Kelazhur’ Schwimer for their StarCraft
+34. Usunier, N., Synnaeve, G., Lin, Z. & Chintala, S. Episodic exploration for deep deterministic    expertise and advice. We thank A. Cain, A. Razavi, D. Toyama, D. Balduzzi, D. Fritz, E. Aygün,
+    policies: an application to StarCraft micromanagement tasks. Preprint at https://arxiv.org/      F. Strub, G. Ostrovski, G. Alain, H. Tang, J. Sanchez, J. Fildes, J. Schrittwieser, J. Novosad,
+    abs/1609.02993v3 (2017).                                                                         K. Simonyan, K. Kurach, P. Hamel, R. Barreira, S. Reed, S. Bartunov, S. Mourad, S. Gaffney,
+35. Weber, B. G. & Mateas, M. Case-based reasoning for build order in real-time strategy             T. Hubert, the team that created PySC2 and the whole DeepMind Team, with special thanks to
+    games. AIIDE ’09 Proc. 5th AAAI Conf. Artificial Intelligence and Interactive Digital            the research platform team, comms and events teams, for their support, ideas, and
+    Entertainment 106–111 (2009).                                                                    encouragement.
+36. Buro, M. ORTS: a hack-free RTS game environment. Intl Conf. Computers and Games
+    280–291 (Springer, 2002).                                                                        Author contributions O.V., I.B., W.M.C., M.M., A.D., J.C., D.H.C., R.P., T.E., P.G., J.O., D. Horgan,
+37. Churchill, D. SparCraft: open source StarCraft combat simulation. https://code.google.           M.K., I.D., A.H., L.S., T.C., J.P.A., C.A., and D.S. contributed equally. O.V., I.B., W.M.C., M.M., A.D.,
+    com/archive/p/sparcraft/ (2013).                                                                 J.C., D.H.C., R.P., T.E., P.G., J.O., D. Horgan, M.K., I.D., A.H., L.S., T.C., J.P.A., C.A., R.L., M.J., V.D.,
+38. Weber, B. G. AIIDE 2010 StarCraft competition. Artificial Intelligence and Interactive           Y.S., A.S.V., D.B., T.L.P., C.G., Z.W., T. Pfaff, T. Pohlen, Y.W., and D.S. designed and built AlphaStar
+    Digital Entertainment Conf. (2010).                                                              with advice from T.S. and T.L. J.M. and R.R. contributed to software engineering. D.W. and D.Y.
+39. Uriarte, A. & Ontañón, S. Improving Monte Carlo tree search policies in StarCraft via            provided expertise in the StarCraft II domain. K.K., D. Hassabis, K.M., O.S., and C.A. managed
+    probabilistic models learned from replay data. Artificial Intelligence and Interactive Digital   the project. D.S., W.M.C., O.V., J.O., I.B., and D.H.C. wrote the paper with contributions from
+    Entertainment Conf. 101–106 (2016).                                                              M.M., J.C., D. Horgan, L.S., R.L., T.C., T.S., and T.L. O.V. and D.S. led the team.
+40. Hsieh, J.-L. & Sun, C.-T. Building a player strategy model by analyzing replays of real-time
+    strategy games. IEEE Intl Joint Conf. Neural Networks 3106–3111 (2008).                          Competing interests M.J., W.M.C., O.V., and D.S. have filed provisional patent application
+41. Synnaeve, G. & Bessiere, P. A Bayesian model for plan recognition in RTS games applied to        62/796,567 about the contents of this manuscript. The remaining authors declare no
+    StarCraft. Artificial Intelligence and Interactive Digital Entertainment Conf. 79–84 (2011).     competing interests.
+42. Shao, K., Zhu, Y. & Zhao, D. StarCraft micromanagement with reinforcement learning
+    and curriculum transfer learning. IEEE Trans. Emerg. Top. Comput. Intell. 3, 73–84               Additional information
+    (2019).                                                                                          Supplementary information is available for this paper at https://doi.org/10.1038/s41586-019-
+43. Facebook CherryPi. https://torchcraft.github.io/TorchCraftAI/.                                   1724-z.
+44. Berkeley Overmind. https://www.icsi.berkeley.edu/icsi/news/2010/10/klein-berkeley-               Correspondence and requests for materials should be addressed to O.V. or D.S.
+    overmind (2010).                                                                                 Peer review information Nature thanks Dave Churchill, Santiago Ontanon and the other,
+45. Justesen, N. & Risi, S. Learning macromanagement in StarCraft from replays using deep            anonymous, reviewer(s) for their contribution to the peer review of this work.
+    learning. IEEE Conf. Computational Intelligence and Games (CIG) 162–169 (2017).                  Reprints and permissions information is available at http://www.nature.com/reprints.
+Article
+
+
+
+
+Extended Data Fig. 1 | APM limits. Top, win probability of AlphaStar         compared to humans. Bottom, distributions of APMs of AlphaStar Final (blue)
+Supervised against itself, when applying various agent action rate limits.   and humans (red) during games on Battle.net. Dashed lines show mean values.
+Our limit does not affect supervised performance and is acceptable when
+Extended Data Fig. 2 | Delays. Left, distribution of delays between when the game generates an observation and when the game executes the corresponding agent
+action. Right, distribution of how long agents request to wait without observing between observations.
+Article
+
+
+
+
+Extended Data Fig. 3 | Overview of the architecture of AlphaStar. A detailed description is provided in the Supplementary Data, Detailed Architecture.
+Extended Data Fig. 4 | Distribution of units built in a game. Units built by Protoss AlphaStar Supervised (left) and AlphaStar Final (right) over multiple self-play
+games. AlphaStar Supervised can build every unit.
+Article
+
+
+
+
+Extended Data Fig. 5 | A more detailed analysis of multi-agent ablations from   performance, provides a less exploitable solution, and has better final agent
+Fig. 3c, d. PFSP-based training outperforms FSP under all measures              performance against the corresponding league.
+considered: it has a stronger population measured by relative population
+Extended Data Fig. 6 | Training infrastructure. Diagram of the training setup for the entire league.
+Article
+
+
+
+
+Extended Data Fig. 7 | Battle.net performance details. Top, visualization of all   league range. Bottom, win probability versus gap in MMR. The shaded grey
+the matches played by AlphaStar Final (right) and matches against opponents        region shows MMR model predictions when players’ uncertainty is varied. The
+above 4,500 MMR of AlphaStar Mid (left). Each Gaussian represents an               red and blue line are empirical win rates for players above 6,000 MMR and
+opponent MMR (with uncertainty): AlphaStar won against opponents shown in          AlphaStar Final, respectively. Both human and AlphaStar win rates closely
+green and lost to those shown in red. Blue is our MMR estimate, and black is the   follow the MMR model.
+MMR reported by StarCraft II. The orange background is the Grandmaster
+Extended Data Fig. 8 | Payoff matrix (limited to only Protoss versus              and exploiters. Interactions between exploiters are highly non-transitive:
+Protoss games for simplicity) split into agent types of the league. Blue means    across the full payoff, there are around 3,000,000 rock–paper–scissor cycles
+a row agent wins, red loses, and white draws. The main agents behave              (with requirement of at least 70% win rates to form a cycle) that involve at least
+transitively: the more recent agents win consistently against older main agents   one exploiter, and around 200 that involve only main agents.
+Article
+Extended Data Table 1 | Agent input space
+
+
+
+
+The observations received by the agent through the raw interface. Information is hidden if it would be hidden from a human player. For example, AlphaStar will not see most information about
+invisible opponent units unless there is a detector; opponent units hidden by the fog of war will not appear in the list of units; opponent units outside the agent’s camera view will have only the
+owner, display type, and position; and opponent’s cloaked units will appear in the list only if they are within the agent’s camera view. Note that this interface displays information that must be
+inferred or remembered by humans, such as the armour upgrades of a visible opponent unit, attack cool-downs, or entities that are occluded by other entities.
+Extended Data Table 2 | Agent action space
+
+
+
+
+The action arguments that agents can submit through the raw interface as part of an action.
+Some fields may be ignored, depending on the action type.
+                                                                                                                                                                                                nature research | reporting summary
+                                                                                                      Corresponding author(s): Oriol Vinyals
+                                                                                                      Last updated by author(s): Oct 3, 2019
+
+
+Reporting Summary
+Nature Research wishes to improve the reproducibility of the work that we publish. This form provides structure for consistency and transparency
+in reporting. For further information on Nature Research policies, see Authors & Referees and the Editorial Policy Checklist.
+
+
+
+
+Statistics
+For all statistical analyses, confirm that the following items are present in the figure legend, table legend, main text, or Methods section.
+n/a Confirmed
+           The exact sample size (n) for each experimental group/condition, given as a discrete number and unit of measurement
+           A statement on whether measurements were taken from distinct samples or whether the same sample was measured repeatedly
+           The statistical test(s) used AND whether they are one- or two-sided
+           Only common tests should be described solely by name; describe more complex techniques in the Methods section.
+
+           A description of all covariates tested
+           A description of any assumptions or corrections, such as tests of normality and adjustment for multiple comparisons
+           A full description of the statistical parameters including central tendency (e.g. means) or other basic estimates (e.g. regression coefficient)
+           AND variation (e.g. standard deviation) or associated estimates of uncertainty (e.g. confidence intervals)
+
+           For null hypothesis testing, the test statistic (e.g. F, t, r) with confidence intervals, effect sizes, degrees of freedom and P value noted
+           Give P values as exact values whenever suitable.
+
+           For Bayesian analysis, information on the choice of priors and Markov chain Monte Carlo settings
+           For hierarchical and complex designs, identification of the appropriate level for tests and full reporting of outcomes
+           Estimates of effect sizes (e.g. Cohen's d, Pearson's r), indicating how they were calculated
+                                                 Our web collection on statistics for biologists contains articles on many of the points above.
+
+
+Software and code
+Policy information about availability of computer code
+  Data collection              Data was collected using the publicly available version of StarCraft II (versions 4.8.2 to 4.10), developed by Blizzard Entertainment.
+
+  Data analysis                We used the open source environment to interact with the game of StarCraft II, provided by Blizzard and DeepMind (https://github.com/
+                               deepmind/pysc2), using the game version 4.10. The networks used the TensorFlow 1.0 library with custom extensions. Analysis was
+                               performed with custom code written in Python 2.7. We additionally provide pseudocode for all algorithms described in the paper.
+For manuscripts utilizing custom algorithms or software that are central to the research but not yet described in published literature, software must be made available to editors/reviewers.
+We strongly encourage code deposition in a community repository (e.g. GitHub). See the Nature Research guidelines for submitting code & software for further information.
+
+
+Data
+Policy information about availability of data
+ All manuscripts must include a data availability statement. This statement should provide the following information, where applicable:
+     - Accession codes, unique identifiers, or web links for publicly available datasets
+     - A list of figures that have associated raw data
+     - A description of any restrictions on data availability
+                                                                                                                                                                                                October 2018
+
+
+
+
+We did provide both the raw data used in the paper from the online experiment, and all the evaluation games played in the StarCraft II standard Replay format. The
+dataset containing all the replays used for imitation learning are distributed by Blizzard using a specific API: https://github.com/Blizzard/s2client-proto
+
+
+
+
+                                                                                                                                                                                                      1
+                                                                                                                                                                            nature research | reporting summary
+Field-specific reporting
+Please select the one below that is the best fit for your research. If you are not sure, read the appropriate sections before making your selection.
+    Life sciences                       Behavioural & social sciences                   Ecological, evolutionary & environmental sciences
+For a reference copy of the document with all sections, see nature.com/documents/nr-reporting-summary-flat.pdf
+
+
+
+
+Life sciences study design
+All studies must disclose on these points even when the disclosure is negative.
+  Sample size              To study our agents performance, we played a total of 360 games online against the population of players that play StarCraft II in the
+                           European servers. The sample size was determined with consultation with Blizzard and professional players, who deemed that 60 games
+                           would be sufficient to estimate performance of a new professional level player reliably with low uncertainty (less than 50 MMR). We did play
+                           90 games total, per race, plus 30, per race, for supervised agents. For the league analysis we used around 130,000,000 full games of agent vs
+                           agent, and for ablations, we used around 20,000,000 games.
+
+  Data exclusions          No data was excluded from the study.
+
+  Replication              Because of the nature of the game, we did perform three independent experiments, using three distinct races. From the total of 9 runs, we
+                           did not observe any significant deviation, and thus we reproduced the intended conditions of the experiment ourselves. Because we played
+                           anonymously, reproducing the same conditions in future studies should be relatively easy, assuming care is taken to remain anonymous.
+
+  Randomization            The players and order in which we played against them was determined by the matchmaking algorithm that Blizzard employs to create
+                           matches in their online service, which was designed many years before our study, and which the authors of this manuscript had no control
+                           over. Such system is solely based on the skill level of players, and is thus random and the authors of this manuscript were blind to group
+                           allocation.
+
+  Blinding                 The authors were blind to group allocation. See "Randomization".
+
+
+
+
+Reporting for specific materials, systems and methods
+We require information from authors about some types of materials, experimental systems and methods used in many studies. Here, indicate whether each material,
+system or method listed is relevant to your study. If you are not sure if a list item applies to your research, read the appropriate section before selecting a response.
+
+Materials & experimental systems                                  Methods
+n/a Involved in the study                                         n/a Involved in the study
+           Antibodies                                                        ChIP-seq
+           Eukaryotic cell lines                                             Flow cytometry
+           Palaeontology                                                     MRI-based neuroimaging
+           Animals and other organisms
+           Human research participants
+           Clinical data
+
+                                                                                                                                                                            October 2018
+
+
+
+
+                                                                                                                                                                                  2
+

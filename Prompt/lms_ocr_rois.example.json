@@ -1,0 +1,55 @@
+{
+  "default_profile": "1920x1080",
+  "profiles": {
+    "1920x1080": {
+      "resolution": [
+        1920,
+        1080
+      ],
+      "metrics": {
+        "damage_done": [
+          1500,
+          120,
+          300,
+          70
+        ],
+        "damage_taken": [
+          1500,
+          200,
+          300,
+          70
+        ],
+        "kills": [
+          1500,
+          280,
+          300,
+          70
+        ],
+        "items_crafted": [
+          1500,
+          360,
+          300,
+          70
+        ]
+      }
+    }
+  },
+  "ranges": {
+    "damage_done": [
+      0,
+      200000
+    ],
+    "damage_taken": [
+      0,
+      200000
+    ],
+    "kills": [
+      0,
+      200
+    ],
+    "items_crafted": [
+      0,
+      2000
+    ]
+  }
+}
