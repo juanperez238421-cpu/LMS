@@ -1,0 +1,138 @@
+﻿{
+  "schema_version": 2,
+  "notes": [
+    "Match-flow ROIs + map identification (5 maps).",
+    "All coords normalized [0..1] relative to FULL GAME FRAME.",
+    "Prefer OCR of map name ROI; fallback to minimap fingerprint vs assets/Mapas/Big+Small images."
+  ],
+  "rois": {
+    "lobby_play_button": {
+      "x": 0.42,
+      "y": 0.78,
+      "w": 0.16,
+      "h": 0.1,
+      "ocr": true
+    },
+    "map_name_label": {
+      "x": 0.7,
+      "y": 0.02,
+      "w": 0.28,
+      "h": 0.08,
+      "ocr": true
+    },
+    "minimap": {
+      "x": 0.76,
+      "y": 0.0,
+      "w": 0.24,
+      "h": 0.24,
+      "ocr": false
+    },
+    "countdown_timer": {
+      "x": 0.44,
+      "y": 0.1,
+      "w": 0.22,
+      "h": 0.1,
+      "ocr": true
+    },
+    "dead_banner": {
+      "x": 0.3,
+      "y": 0.62,
+      "w": 0.4,
+      "h": 0.12,
+      "ocr": true
+    },
+    "dead_salon_button": {
+      "x": 0.4,
+      "y": 0.74,
+      "w": 0.2,
+      "h": 0.14,
+      "ocr": false,
+      "click": true
+    },
+    "end_title": {
+      "x": 0.3,
+      "y": 0.03,
+      "w": 0.4,
+      "h": 0.12,
+      "ocr": true
+    },
+    "end_time_alive": {
+      "x": 0.08,
+      "y": 0.78,
+      "w": 0.28,
+      "h": 0.1,
+      "ocr": true
+    },
+    "end_eliminations": {
+      "x": 0.08,
+      "y": 0.86,
+      "w": 0.28,
+      "h": 0.1,
+      "ocr": true
+    },
+    "end_objects_built": {
+      "x": 0.62,
+      "y": 0.86,
+      "w": 0.3,
+      "h": 0.1,
+      "ocr": true
+    }
+  },
+  "maps": [
+    {
+      "map_id": "castillos_deserticos",
+      "display_name": "CASTILLOS DESÉRTICOS",
+      "relative_path": "Big/CASTILLOS DESÉRTICOS.png",
+      "size_class": "big"
+    },
+    {
+      "map_id": "la_finca",
+      "display_name": "LA FINCA",
+      "relative_path": "Big/LA FINCA.png",
+      "size_class": "big"
+    },
+    {
+      "map_id": "asentamiento_desertico",
+      "display_name": "ASENTAMIENTO DESÉRTICO",
+      "relative_path": "Small/ASENTAMIENTO DESÉRTICO.png",
+      "size_class": "small"
+    },
+    {
+      "map_id": "fortaleza_de_lava",
+      "display_name": "FORTALEZA DE LAVA",
+      "relative_path": "Small/FORTALEZA DE LAVA.png",
+      "size_class": "small"
+    },
+    {
+      "map_id": "jardines_congelados",
+      "display_name": "JARDINES CONGELADOS",
+      "relative_path": "Small/JARDINES CONGELADOS.png",
+      "size_class": "small"
+    }
+  ],
+  "assets_map_dir_big_default": "assets/Mapas/Big",
+  "assets_map_dir_small_default": "assets/Mapas/Small",
+  "spawn_slots": [
+    {
+      "slot_id": 0,
+      "click_xy": [
+        0.25,
+        0.25
+      ]
+    },
+    {
+      "slot_id": 1,
+      "click_xy": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "slot_id": 2,
+      "click_xy": [
+        0.75,
+        0.25
+      ]
+    }
+  ]
+}
