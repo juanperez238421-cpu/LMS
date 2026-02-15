@@ -1,0 +1,15 @@
+warning: in the working copy of 'README_TESTING.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lms_live_collector.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/botgame/telemetry/schema.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_lms_live_collector_bot.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/gui_web/frontend/app.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/gui_web/frontend/index.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/telemetry_tui.py', LF will be replaced by CRLF the next time Git touches it
+ README_TESTING.md                    |    5 [32m+[m
+ lms_live_collector.py                | 1440 [32m+++++++++++++++++++++++++++++++[m[31m---[m
+ src/botgame/telemetry/schema.py      |    9 [32m+[m
+ tests/test_lms_live_collector_bot.py |  129 [32m++[m[31m-[m
+ tools/gui_web/frontend/app.js        |    9 [32m+[m
+ tools/gui_web/frontend/index.html    |    9 [32m+[m
+ tools/telemetry_tui.py               |    8 [32m+[m
+ 7 files changed, 1517 insertions(+), 92 deletions(-)

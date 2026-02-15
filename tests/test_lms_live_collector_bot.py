@@ -2,7 +2,14 @@ from unittest.mock import MagicMock, patch
 import sys
 
 sys.path.insert(0, "./")
-from lms_live_collector import build_parser, main
+from lms_live_collector import (
+    build_parser,
+    main,
+    detect_known_map_from_runtime_name,
+    detect_lobby_waiting_phrase,
+    detect_outside_phrase,
+    detect_salon_phrase,
+)
 
 
 def test_build_parser_play_game_argument():
@@ -57,6 +64,19 @@ def test_build_parser_play_game_argument():
     assert abs(float(args.bot_visual_ocr_timeout_sec) - 0.18) < 1e-9
     assert int(args.bot_visual_ocr_max_rois) == 1
 
+
+def test_detect_runtime_map_aliases_and_known_phrases():
+    map_guess = detect_known_map_from_runtime_name("TileMap_Royale_75x75_NEW_TwoCastles_v7")
+    assert map_guess is not None
+    assert map_guess["map_id"] == "castillos_deserticos"
+    assert map_guess["map_name"] == "CASTILLOS DESERTICOS"
+
+    assert detect_lobby_waiting_phrase("MAZMORRA REAL  BUSCANDO JUGADORES") is True
+    assert detect_lobby_waiting_phrase("mazmorra rial buscand0 jugadorez") is True
+    assert detect_lobby_waiting_phrase("PRACTICA no puedes morir mientras esperas a que empiece un combate") is True
+    assert detect_outside_phrase("ESTAS FUERA") is True
+    assert detect_outside_phrase("estas fvera") is True
+    assert detect_salon_phrase("SALON") is True
 
 def test_main_play_game_uses_ui_state_and_left_click():
     click_probe = {"down0": 0, "up0": 0, "click0": 0, "lastTarget": ""}
@@ -277,3 +297,110 @@ def test_main_play_game_lobby_clicks_play_without_movement():
 
     assert mock_control_locator.click.call_count > 0
     assert mock_page.keyboard.down.call_count == 0
+
+
+def test_main_play_game_lobby_waiting_beats_body_class_playing():
+    mock_p = MagicMock()
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    mock_frame = MagicMock()
+    mock_iframe_locator = MagicMock()
+    mock_iframe_handle = MagicMock()
+    mock_control_locator = MagicMock()
+
+    mock_sync = MagicMock()
+    mock_sync.__enter__.return_value = mock_p
+    mock_sync.__exit__.return_value = False
+
+    mock_p.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+
+    mock_iframe_locator.first = mock_iframe_locator
+    mock_iframe_locator.wait_for.return_value = None
+    mock_iframe_locator.element_handle.return_value = mock_iframe_handle
+    mock_iframe_locator.bounding_box.return_value = {
+        "x": 100.0,
+        "y": 200.0,
+        "width": 800.0,
+        "height": 600.0,
+    }
+    mock_iframe_handle.content_frame.return_value = mock_frame
+    mock_page.viewport_size = {"width": 1280, "height": 720}
+
+    mock_control_locator.first = mock_control_locator
+    mock_control_locator.wait_for.return_value = None
+    mock_control_locator.click.return_value = None
+    mock_control_locator.evaluate.return_value = None
+    mock_control_locator.is_visible.return_value = False
+    mock_frame.locator.return_value = mock_control_locator
+    mock_frame.focus.return_value = None
+    mock_frame.wait_for_load_state.return_value = None
+
+    def page_locator_side_effect(selector, *args, **kwargs):
+        if str(selector) == "iframe#game_drop":
+            return mock_iframe_locator
+        return mock_control_locator
+
+    mock_page.locator.side_effect = page_locator_side_effect
+
+    def frame_evaluate_side_effect(script, *args):
+        s = str(script)
+        if "const isVisible" in s:
+            return {
+                "character_visible": False,
+                "select_visible": False,
+                "play_visible": False,
+                "canvas_visible": True,
+                "body_class": "playing",
+                "outside_text_visible": False,
+                "salon_visible": False,
+                "lobby_waiting_visible": True,
+            }
+        if "__lmsClickProbe ||" in s:
+            return {"down0": 0, "up0": 0, "click0": 0, "lastTarget": ""}
+        if "window.__lmsClickProbe = " in s:
+            return None
+        if "__lmsBotCursor" in s:
+            return True
+        if "const c = document.querySelector('canvas')" in s:
+            return {"x": 20.0, "y": 30.0, "width": 400.0, "height": 300.0}
+        return None
+
+    mock_frame.evaluate.side_effect = frame_evaluate_side_effect
+
+    sleep_calls = {"n": 0}
+
+    def sleep_side_effect(_seconds):
+        sleep_calls["n"] += 1
+        if sleep_calls["n"] >= 5:
+            raise KeyboardInterrupt
+        return None
+
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.fetchone.return_value = [0]
+
+    with patch("lms_live_collector.sync_playwright", return_value=mock_sync):
+        with patch("lms_live_collector.sqlite3.connect", return_value=mock_conn):
+            with patch("lms_live_collector.ensure_schema"):
+                with patch("lms_live_collector.ensure_live_schema"):
+                    with patch("lms_live_collector.ensure_ws_schema"):
+                        with patch("time.sleep", side_effect=sleep_side_effect):
+                            with patch.object(
+                                sys,
+                                "argv",
+                                [
+                                    "lms_live_collector.py",
+                                    "--play-game",
+                                    "--no-persistent",
+                                    "--headless",
+                                    "--bot-ui-poll-ms",
+                                    "50",
+                                ],
+                            ):
+                                main()
+
+    # Regression guard: queue/lobby waiting must not execute in-match movement.
+    assert mock_page.keyboard.down.call_count == 0
+

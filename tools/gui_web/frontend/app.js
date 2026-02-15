@@ -289,6 +289,15 @@ function renderFrame(frame) {
   $("decision").textContent = safeText(frame.decision);
   $("action").textContent = safeText(frame.action_last);
   $("actionOk").textContent = safeText(frame.action_ok);
+  $("phase").textContent = safeText(frame.game_phase || frame.decision);
+  $("phaseConf").textContent = Number(frame.phase_confidence ?? 0).toFixed(2);
+  $("phaseReason").textContent = safeText(frame.phase_reason);
+  $("mapId").textContent = safeText(frame.map_id);
+  $("mapName").textContent = safeText(frame.map_name);
+  $("mapSize").textContent = safeText(frame.map_size_class);
+  $("endTimeAlive").textContent = safeText(frame.end_time_alive_sec);
+  $("endElims").textContent = safeText(frame.end_eliminations);
+  $("endBuilt").textContent = safeText(frame.end_objects_built);
 
   $("zoneOutside").textContent = String(!!frame.zone_outside);
   $("zoneToxic").textContent = String(!!frame.zone_toxic);

@@ -55,6 +55,15 @@ class TelemetryFrame(BaseModel):
     decision: str = ""
     action_last: str = ""
     action_ok: Optional[bool] = None
+    game_phase: str = ""
+    phase_confidence: float = 0.0
+    phase_reason: str = ""
+    map_id: str = ""
+    map_name: str = ""
+    map_size_class: str = ""
+    end_time_alive_sec: Optional[int] = None
+    end_eliminations: Optional[int] = None
+    end_objects_built: Optional[int] = None
 
     # --- movement / collision proxies ---
     motion_score: Optional[float] = None

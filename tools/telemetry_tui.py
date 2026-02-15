@@ -37,6 +37,14 @@ def build_table(last: Dict[str, Any]) -> Table:
     t.add_row("Damage Out", f"tick={last.get('dmg_out_tick',0):.1f}  total={last.get('dmg_out_total',0):.1f}")
 
     t.add_row("Enemy", f"visible={last.get('enemy_visible',False)} conf={last.get('enemy_conf',0):.2f} dir={last.get('enemy_dir_deg','-')}")
+    t.add_row(
+        "Phase",
+        f"{last.get('game_phase','-')} conf={last.get('phase_confidence',0):.2f} reason={last.get('phase_reason','-')}",
+    )
+    t.add_row(
+        "Map",
+        f"name={last.get('map_name','-')} id={last.get('map_id','-')} size={last.get('map_size_class','-')}",
+    )
     t.add_row("Decision", f"{last.get('decision','')}")
     t.add_row("Action", f"{last.get('action_last','')} ok={last.get('action_ok','-')}")
 

@@ -133,12 +133,93 @@ LOBBY_EVENT_HINTS = (
     "loading/lobby_loaded",
     "loading/lobby_interactable",
     "games_played/play_button_hit",
+    "frame_rate/choosing_spawn",
+    "games_played/waiting_area",
+    "games_played/practice_wait",
 )
 LOADING_EVENT_HINTS = (
     "connection/connecting",
     "loading/config_loaded",
     "loading/unity_loaded",
     "authentication/authentication_start",
+)
+KNOWN_LOBBY_PHRASES = (
+    "mazmorra real buscando jugadores",
+    "buscando jugadores",
+    "practica",
+    "no puedes morir mientras esperas a que empiece un combate",
+)
+QUEUE_EVENT_HINTS = (
+    "choosing_spawn",
+    "waiting_area",
+    "practice",
+    "pre_match",
+    "matchmaking",
+    "buscando_jugadores",
+)
+KNOWN_RUNTIME_MAP_ALIASES = (
+    {
+        "map_id": "castillos_deserticos",
+        "map_name": "CASTILLOS DESERTICOS",
+        "map_size_class": "big",
+        "aliases": ("twocastles", "two_castles", "twocastles", "castles"),
+    },
+    {
+        "map_id": "la_finca",
+        "map_name": "LA FINCA",
+        "map_size_class": "big",
+        "aliases": ("elaborategardens", "elaborate_gardens", "finca"),
+    },
+    {
+        "map_id": "fortaleza_de_lava",
+        "map_name": "FORTALEZA DE LAVA",
+        "map_size_class": "small",
+        "aliases": ("fortress", "lavfortress", "fortaleza"),
+    },
+    {
+        "map_id": "jardines_congelados",
+        "map_name": "JARDINES CONGELADOS",
+        "map_size_class": "small",
+        "aliases": ("peacefulgardens", "peaceful_gardens", "frozengardens"),
+    },
+    {
+        "map_id": "asentamiento_desertico",
+        "map_name": "ASENTAMIENTO DESERTICO",
+        "map_size_class": "small",
+        "aliases": ("merrygoround", "merry_go_round", "settlement"),
+    },
+)
+KNOWN_MAP_DEFS = (
+    {
+        "map_id": "castillos_deserticos",
+        "display_name": "CASTILLOS DESERTICOS",
+        "size_class": "big",
+        "tokens": ("castillos deserticos", "castillos desertico", "desert castles"),
+    },
+    {
+        "map_id": "la_finca",
+        "display_name": "LA FINCA",
+        "size_class": "big",
+        "tokens": ("la finca", "finca"),
+    },
+    {
+        "map_id": "asentamiento_desertico",
+        "display_name": "ASENTAMIENTO DESERTICO",
+        "size_class": "small",
+        "tokens": ("asentamiento desertico", "desert settlement"),
+    },
+    {
+        "map_id": "fortaleza_de_lava",
+        "display_name": "FORTALEZA DE LAVA",
+        "size_class": "small",
+        "tokens": ("fortaleza de lava", "lava fortress"),
+    },
+    {
+        "map_id": "jardines_congelados",
+        "display_name": "JARDINES CONGELADOS",
+        "size_class": "small",
+        "tokens": ("jardines congelados", "frozen gardens", "peaceful gardens"),
+    },
 )
 MATCH_END_EVENT_HINTS = (
     "games_played/match_end",
@@ -1259,6 +1340,96 @@ def normalize_text_for_match(text: str) -> str:
     return ascii_text
 
 
+def detect_known_map_from_text(text: str) -> Optional[Dict[str, str]]:
+    text_norm = normalize_text_for_match(text)
+    if not text_norm:
+        return None
+    for m in KNOWN_MAP_DEFS:
+        for token in m.get("tokens", ()):
+            token_norm = normalize_text_for_match(str(token or ""))
+            if token_norm and token_norm in text_norm:
+                return {
+                    "map_id": str(m.get("map_id", "") or ""),
+                    "map_name": str(m.get("display_name", "") or ""),
+                    "map_size_class": str(m.get("size_class", "") or ""),
+                    "source": "ocr_map_name",
+                }
+    return None
+
+
+def detect_known_map_from_runtime_name(runtime_map_name: str) -> Optional[Dict[str, str]]:
+    text_norm = normalize_text_for_match(runtime_map_name)
+    if not text_norm:
+        return None
+    from_ocr = detect_known_map_from_text(text_norm)
+    if from_ocr:
+        from_ocr["source"] = "runtime_map_name"
+        return from_ocr
+
+    text_compact = re.sub(r"[^a-z0-9]+", "", text_norm)
+    for alias_def in KNOWN_RUNTIME_MAP_ALIASES:
+        for alias in alias_def.get("aliases", ()):
+            alias_norm = normalize_text_for_match(str(alias or ""))
+            alias_compact = re.sub(r"[^a-z0-9]+", "", alias_norm)
+            if not alias_norm and not alias_compact:
+                continue
+            if (alias_norm and alias_norm in text_norm) or (alias_compact and alias_compact in text_compact):
+                return {
+                    "map_id": str(alias_def.get("map_id", "") or ""),
+                    "map_name": str(alias_def.get("map_name", runtime_map_name) or runtime_map_name),
+                    "map_size_class": str(alias_def.get("map_size_class", "") or ""),
+                    "source": "runtime_alias",
+                }
+
+    # Keep fallback useful: infer size class from internal tile map naming.
+    size_class = ""
+    if "75x75" in text_norm:
+        size_class = "big"
+    elif "51x51" in text_norm:
+        size_class = "small"
+    if size_class:
+        return {
+            "map_id": "",
+            "map_name": str(runtime_map_name or ""),
+            "map_size_class": size_class,
+            "source": "runtime_size_hint",
+        }
+    return None
+
+
+def extract_end_metrics_from_text(text: str) -> Dict[str, Optional[int]]:
+    text_norm = normalize_text_for_match(text)
+    out: Dict[str, Optional[int]] = {
+        "time_alive_sec": None,
+        "eliminations": None,
+        "objects_built": None,
+    }
+    if not text_norm:
+        return out
+    mmss = re.search(r"\b(?P<m>\d{1,2}):(?P<s>\d{2})\b", text_norm)
+    if mmss:
+        try:
+            mm = int(mmss.group("m"))
+            ss = int(mmss.group("s"))
+            if 0 <= ss < 60:
+                out["time_alive_sec"] = (mm * 60) + ss
+        except Exception:
+            pass
+    elim = re.search(r"(?:eliminaciones|elimination|kills?)\D{0,8}(?P<n>\d{1,4})", text_norm)
+    if elim:
+        try:
+            out["eliminations"] = int(elim.group("n"))
+        except Exception:
+            pass
+    built = re.search(r"(?:objetos?\s+construidos?|objects?\s+built)\D{0,8}(?P<n>\d{1,4})", text_norm)
+    if built:
+        try:
+            out["objects_built"] = int(built.group("n"))
+        except Exception:
+            pass
+    return out
+
+
 def fuzzy_contains_phrase(text_norm: str, phrase_norm: str, threshold: int = 90) -> bool:
     text_s = str(text_norm or "").strip()
     phrase_s = str(phrase_norm or "").strip()
@@ -1273,6 +1444,79 @@ def fuzzy_contains_phrase(text_norm: str, phrase_norm: str, threshold: int = 90)
     except Exception:
         return False
     return score >= int(max(1, min(100, threshold)))
+
+
+def detect_lobby_waiting_phrase(text_norm: str) -> bool:
+    txt = normalize_text_for_match(text_norm)
+    if not txt:
+        return False
+    txt = txt.replace("0", "o").replace("1", "i")
+    phrase = "mazmorra real buscando jugadores"
+    if phrase in txt:
+        return True
+    has_mazmorra = ("mazmorra" in txt) or fuzzy_contains_phrase(txt, "mazmorra", threshold=92)
+    has_real = ("real" in txt) or ("rial" in txt) or fuzzy_contains_phrase(txt, "real", threshold=72)
+    has_buscando = ("buscando" in txt) or fuzzy_contains_phrase(txt, "buscando", threshold=90)
+    has_jugadores = (
+        ("jugadores" in txt)
+        or ("jugador" in txt)
+        or fuzzy_contains_phrase(txt, "jugadores", threshold=84)
+    )
+    # Queue/practice banner inside canvas during pre-match:
+    # "PRACTICA ... No puedes morir mientras esperas a que empiece un combate."
+    has_practica = ("practica" in txt) or fuzzy_contains_phrase(txt, "practica", threshold=78)
+    has_no_puedes_morir = (
+        ("no puedes morir" in txt)
+        or fuzzy_contains_phrase(txt, "no puedes morir", threshold=74)
+    )
+    has_esperas = ("mientras esperas" in txt) or fuzzy_contains_phrase(
+        txt, "mientras esperas", threshold=72
+    )
+    has_empiece_combate = (
+        ("empiece un combate" in txt)
+        or ("empieza un combate" in txt)
+        or fuzzy_contains_phrase(txt, "empiece un combate", threshold=72)
+    )
+    if has_mazmorra and has_real and has_buscando and has_jugadores:
+        return True
+    if has_practica and ((has_no_puedes_morir and has_esperas) or has_empiece_combate):
+        return True
+    if fuzz is None:
+        return False
+    try:
+        score_partial = int(fuzz.partial_ratio(phrase, txt))
+        score_token = int(fuzz.token_set_ratio(phrase, txt))
+    except Exception:
+        score_partial = 0
+        score_token = 0
+    if score_partial >= 90 and score_token >= 86:
+        return True
+
+    return False
+
+
+def detect_outside_phrase(text_norm: str) -> bool:
+    txt = normalize_text_for_match(text_norm)
+    if not txt:
+        return False
+    if "estas fuera" in txt:
+        return True
+    if "estas fvera" in txt:
+        return True
+    has_estas = ("estas" in txt) or fuzzy_contains_phrase(txt, "estas", threshold=78)
+    has_fuera = ("fuera" in txt) or ("fvera" in txt) or fuzzy_contains_phrase(txt, "fuera", threshold=74)
+    if has_estas and has_fuera:
+        return True
+    return fuzzy_contains_phrase(txt, "estas fuera", threshold=78)
+
+
+def detect_salon_phrase(text_norm: str) -> bool:
+    txt = normalize_text_for_match(text_norm)
+    if not txt:
+        return False
+    if "salon" in txt:
+        return True
+    return fuzzy_contains_phrase(txt, "salon", threshold=76)
 
 
 def try_parse_payload_text(raw_text: str) -> Optional[Dict[str, Any]]:
@@ -2536,6 +2780,10 @@ def main() -> None:
         "health_source": "none",
         "health_signal_ts": 0.0,
         "map_name": "",
+        "map_id": "",
+        "map_size_class": "",
+        "map_signal_source": "none",
+        "map_signal_ts": 0.0,
         "own_guardian": "",
         "enemy_guardian": "",
         "enemy_signal_ts": 0.0,
@@ -2579,6 +2827,18 @@ def main() -> None:
         "visual_names": [],
         "visual_damage_hint": 0.0,
         "visual_ocr_ts": 0.0,
+        "lobby_phrase_ts": 0.0,
+        "outside_phrase_ts": 0.0,
+        "lobby_phrase_lock_until": 0.0,
+        "outside_phrase_lock_until": 0.0,
+        "queue_ts": 0.0,
+        "queue_lock_until": 0.0,
+        "game_phase": "unknown",
+        "phase_confidence": 0.0,
+        "phase_reason": "boot",
+        "match_end_time_alive_sec": None,
+        "match_end_eliminations": None,
+        "match_end_objects_built": None,
     })
 
     def iter_event_key_values(node: Any, prefix: str = "") -> List[Tuple[str, Any]]:
@@ -2680,6 +2940,25 @@ def main() -> None:
             "rune",
             "orb",
         )
+        end_time_tokens = (
+            "timealive",
+            "survivaltime",
+            "secondsalive",
+            "timeinmatch",
+            "duration",
+        )
+        end_elimination_tokens = (
+            "eliminations",
+            "elimination",
+            "kills",
+            "killcount",
+            "totalkills",
+        )
+        end_objects_tokens = (
+            "objectsbuilt",
+            "buildcount",
+            "structuresbuilt",
+        )
 
         def classify_loot_type(path_l: str, value_l: str) -> str:
             joined = f"{path_l} {value_l}"
@@ -2691,6 +2970,30 @@ def main() -> None:
                 return "gear"
             return "generic_loot"
 
+        def update_map_signal_from_text(map_text: str, source_hint: str, now_mono: Optional[float] = None) -> bool:
+            value_s = str(map_text or "").strip()
+            if not value_s:
+                return False
+            guessed = detect_known_map_from_runtime_name(value_s)
+            if guessed is None:
+                guessed = detect_known_map_from_text(value_s)
+            if guessed is not None:
+                guessed_id = str(guessed.get("map_id", "") or "")
+                guessed_name = str(guessed.get("map_name", "") or value_s)
+                guessed_size = str(guessed.get("map_size_class", "") or "")
+                if guessed_id:
+                    bot_event_signals["map_id"] = guessed_id
+                if guessed_name:
+                    bot_event_signals["map_name"] = guessed_name
+                if guessed_size:
+                    bot_event_signals["map_size_class"] = guessed_size
+                bot_event_signals["map_signal_source"] = str(guessed.get("source", source_hint) or source_hint)
+                bot_event_signals["map_signal_ts"] = float(
+                    time.monotonic() if now_mono is None else now_mono
+                )
+                return True
+            return False
+
         pairs = iter_event_key_values(event_obj)
         for path, value in pairs:
             path_l = str(path or "").lower()
@@ -2700,8 +3003,73 @@ def main() -> None:
                 if not value_s:
                     continue
                 value_l = value_s.lower()
-                if ("map_name" in path_l or path_l.endswith(".map")) and len(value_s) > 0:
-                    bot_event_signals["map_name"] = value_s
+                if any(tok in compact_path for tok in end_time_tokens):
+                    metric_guess = extract_end_metrics_from_text(f"time alive {value_s}")
+                    time_alive_sec = metric_guess.get("time_alive_sec")
+                    if time_alive_sec is None:
+                        try:
+                            time_alive_sec = int(round(float(value_s.replace(",", "."))))
+                        except Exception:
+                            time_alive_sec = None
+                    if time_alive_sec is not None and 0 <= int(time_alive_sec) <= 7200:
+                        bot_event_signals["match_end_time_alive_sec"] = int(time_alive_sec)
+                if any(tok in compact_path for tok in end_elimination_tokens):
+                    try:
+                        elim_value = int(round(float(value_s.replace(",", "."))))
+                    except Exception:
+                        elim_value = None
+                    if elim_value is not None and 0 <= int(elim_value) <= 999:
+                        bot_event_signals["match_end_eliminations"] = int(elim_value)
+                if any(tok in compact_path for tok in end_objects_tokens):
+                    try:
+                        built_value = int(round(float(value_s.replace(",", "."))))
+                    except Exception:
+                        built_value = None
+                    if built_value is not None and 0 <= int(built_value) <= 999:
+                        bot_event_signals["match_end_objects_built"] = int(built_value)
+                map_path_hint = (
+                    ("map_name" in path_l)
+                    or path_l.endswith(".map")
+                    or ("mapname" in compact_path)
+                    or ("tilemap" in compact_path)
+                    or compact_path.endswith("mapid")
+                    or compact_path.endswith("runtimemap")
+                )
+                map_value_hint = (
+                    ("tilemap" in value_l)
+                    or ("75x75" in value_l)
+                    or ("51x51" in value_l)
+                    or bool(detect_known_map_from_text(value_s))
+                )
+                if map_path_hint or map_value_hint:
+                    map_updated = update_map_signal_from_text(
+                        map_text=value_s,
+                        source_hint="runtime_map_name",
+                    )
+                    if (not map_updated) and map_path_hint:
+                        bot_event_signals["map_name"] = value_s
+                        bot_event_signals["map_signal_source"] = "runtime_map_field"
+                        bot_event_signals["map_signal_ts"] = time.monotonic()
+                value_norm = normalize_text_for_match(value_s)
+                if detect_lobby_waiting_phrase(value_norm):
+                    now_queue = time.monotonic()
+                    bot_event_signals["queue_ts"] = now_queue
+                    bot_event_signals["lobby_phrase_ts"] = now_queue
+                    bot_event_signals["lobby_ts"] = max(
+                        float(bot_event_signals.get("lobby_ts", 0.0) or 0.0),
+                        now_queue,
+                    )
+                    bot_event_signals["queue_lock_until"] = max(
+                        float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0),
+                        now_queue + 3.8,
+                    )
+                if detect_outside_phrase(value_norm):
+                    now_outside = time.monotonic()
+                    bot_event_signals["outside_phrase_ts"] = now_outside
+                    bot_event_signals["death_ts"] = max(
+                        float(bot_event_signals.get("death_ts", 0.0) or 0.0),
+                        now_outside,
+                    )
                 if any(tok in path_l for tok in guardian_tokens):
                     if any(h in path_l for h in ("enemy", "opponent", "killer", "attacker", "target")):
                         bot_event_signals["enemy_guardian"] = value_s
@@ -2936,6 +3304,12 @@ def main() -> None:
                 bot_event_signals["zone_signal_ts"] = time.monotonic()
             if any(h in path_l for h in ("leaderboard_rank", "rank")) and 0 <= num <= 500:
                 bot_event_signals["last_rank"] = num
+            if any(tok in compact_path for tok in end_time_tokens) and 0.0 <= num <= 7200.0:
+                bot_event_signals["match_end_time_alive_sec"] = int(round(num))
+            if any(tok in compact_path for tok in end_elimination_tokens) and 0.0 <= num <= 999.0:
+                bot_event_signals["match_end_eliminations"] = int(round(num))
+            if any(tok in compact_path for tok in end_objects_tokens) and 0.0 <= num <= 999.0:
+                bot_event_signals["match_end_objects_built"] = int(round(num))
             if any(h in path_l for h in ("mana", "mp", "energy")):
                 if any(h in path_l for h in ("max_mana", "mana_max", "maxmana", "max_mp", "max_energy")):
                     if num > 0:
@@ -2966,6 +3340,19 @@ def main() -> None:
                     bot_event_signals["loot_ts"] = time.monotonic()
                     bot_event_signals["loot_count"] = int(bot_event_signals.get("loot_count", 0) or 0) + 1
 
+        if any(h in event_name_compact for h in ("matchend", "playermatchresult", "pmr")):
+            try:
+                event_text = json.dumps(event_obj, ensure_ascii=True)
+            except Exception:
+                event_text = str(event_obj)
+            end_metrics_guess = extract_end_metrics_from_text(event_text)
+            if end_metrics_guess.get("time_alive_sec") is not None:
+                bot_event_signals["match_end_time_alive_sec"] = int(end_metrics_guess["time_alive_sec"])
+            if end_metrics_guess.get("eliminations") is not None:
+                bot_event_signals["match_end_eliminations"] = int(end_metrics_guess["eliminations"])
+            if end_metrics_guess.get("objects_built") is not None:
+                bot_event_signals["match_end_objects_built"] = int(end_metrics_guess["objects_built"])
+
     def note_bot_event_signal(event_name: str) -> None:
         event_name_s = str(event_name or "").strip()
         if not event_name_s:
@@ -2975,12 +3362,56 @@ def main() -> None:
         bot_event_signals["last_event_name"] = event_name_s
         bot_event_signals["last_event_ts"] = now_mono
 
+        if any(
+            token in event_name_lower
+            for token in (
+                "map",
+                "tilemap",
+                "castillo",
+                "finca",
+                "fortaleza",
+                "jardines",
+                "asentamiento",
+                "desert",
+                "garden",
+                "lava",
+                "merry",
+            )
+        ):
+            event_map_guess = detect_known_map_from_runtime_name(event_name_s)
+            if event_map_guess is not None:
+                guessed_id = str(event_map_guess.get("map_id", "") or "")
+                guessed_name = str(event_map_guess.get("map_name", "") or "")
+                guessed_size = str(event_map_guess.get("map_size_class", "") or "")
+                if guessed_id:
+                    bot_event_signals["map_id"] = guessed_id
+                if guessed_name:
+                    bot_event_signals["map_name"] = guessed_name
+                if guessed_size:
+                    bot_event_signals["map_size_class"] = guessed_size
+                bot_event_signals["map_signal_source"] = str(
+                    event_map_guess.get("source", "event_name_map")
+                )
+                bot_event_signals["map_signal_ts"] = now_mono
+
         if any(hint in event_name_lower for hint in MATCH_EVENT_HINTS):
             bot_event_signals["match_ts"] = now_mono
         if any(hint in event_name_lower for hint in MATCH_END_EVENT_HINTS):
             bot_event_signals["match_end_ts"] = now_mono
         if any(hint in event_name_lower for hint in LOBBY_EVENT_HINTS):
             bot_event_signals["lobby_ts"] = now_mono
+        if any(hint in event_name_lower for hint in QUEUE_EVENT_HINTS):
+            recent_match_now = is_recent_signal(bot_event_signals.get("match_ts", 0.0), 8.0, now_mono)
+            recent_enemy_now = bool(
+                is_recent_signal(bot_event_signals.get("enemy_signal_ts", 0.0), 2.5, now_mono)
+                and float(bot_event_signals.get("enemy_signal_confidence", 0.0) or 0.0) >= 0.44
+            )
+            if not (recent_match_now and recent_enemy_now):
+                bot_event_signals["queue_ts"] = now_mono
+                bot_event_signals["queue_lock_until"] = max(
+                    float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0),
+                    now_mono + 3.2,
+                )
         if any(hint in event_name_lower for hint in LOADING_EVENT_HINTS) or event_name_lower.startswith("loading/"):
             bot_event_signals["loading_ts"] = now_mono
         if any(hint in event_name_lower for hint in DEATH_EVENT_HINTS):
@@ -3697,6 +4128,15 @@ def main() -> None:
             return style.display !== 'none' && style.visibility !== 'hidden' &&
                    rect.width > 2 && rect.height > 2;
           };
+          const norm = (txt) => String(txt || '')
+            .normalize('NFD')
+            .replace(/[\\u0300-\\u036f]/g, '')
+            .toLowerCase();
+          const bodyText = norm(document.body ? document.body.innerText : '');
+          const buttonTexts = Array.from(
+            document.querySelectorAll("button, [role='button'], div.play-button")
+          ).map((el) => norm(el && el.textContent ? el.textContent : ''));
+          const hasButtonText = (needle) => buttonTexts.some((txt) => txt.includes(needle));
           return {
             character_visible: isVisible('div.character-select-view div.character-container') ||
                                isVisible('div.character-container'),
@@ -3708,6 +4148,11 @@ def main() -> None:
                           isVisible(\"button[data-testid='play-button']\"),
             canvas_visible: isVisible('canvas'),
             body_class: document.body ? document.body.className : '',
+            outside_text_visible: bodyText.includes('estas fuera'),
+            salon_visible: hasButtonText('salon') || hasButtonText('lobby'),
+            lobby_waiting_visible: (
+              bodyText.includes('mazmorra real') && bodyText.includes('buscando jugadores')
+            ),
           };
         }
         """
@@ -3723,6 +4168,9 @@ def main() -> None:
             "play_visible": False,
             "canvas_visible": False,
             "body_class": "",
+            "outside_text_visible": False,
+            "salon_visible": False,
+            "lobby_waiting_visible": False,
         }
 
     def resolve_google_credentials(args: argparse.Namespace) -> Tuple[str, str]:
@@ -4131,19 +4579,42 @@ def main() -> None:
         dom_play = bool(play_source == "dom_text_play")
         visual_hint = str(visual_state_hint or "unknown").strip().lower()
         visual_conf = max(0.0, min(1.0, float(visual_state_confidence or 0.0)))
+        ui_outside_visible = bool(ui_state.get("outside_text_visible"))
+        ui_salon_visible = bool(ui_state.get("salon_visible"))
+        ui_lobby_waiting_visible = bool(ui_state.get("lobby_waiting_visible"))
         transition_elapsed = (
             (now_mono - play_transition_started_at)
             if play_transition_started_at is not None
             else None
         )
         has_recent_match = is_recent_signal(bot_event_signals.get("match_ts", 0.0), 75.0, now_mono)
-        has_recent_lobby = is_recent_signal(bot_event_signals.get("lobby_ts", 0.0), 45.0, now_mono)
+        has_recent_lobby = is_recent_signal(bot_event_signals.get("lobby_ts", 0.0), 16.0, now_mono)
+        has_recent_lobby_phrase = is_recent_signal(bot_event_signals.get("lobby_phrase_ts", 0.0), 9.0, now_mono)
+        has_recent_outside_phrase = is_recent_signal(bot_event_signals.get("outside_phrase_ts", 0.0), 18.0, now_mono)
         has_recent_loading = is_recent_signal(bot_event_signals.get("loading_ts", 0.0), 30.0, now_mono)
+        has_recent_queue = is_recent_signal(bot_event_signals.get("queue_ts", 0.0), 4.5, now_mono)
         match_ts = float(bot_event_signals.get("match_ts", 0.0) or 0.0)
         lobby_ts = float(bot_event_signals.get("lobby_ts", 0.0) or 0.0)
         lobby_signal_newer = lobby_ts > 0.0 and (lobby_ts >= (match_ts - 0.8))
         last_event_lower = str(bot_event_signals.get("last_event_name", "") or "").lower()
         event_lobbyish = any(h in last_event_lower for h in LOBBY_EVENT_HINTS) or last_event_lower.startswith("loading/lobby")
+        event_queueish = event_lobbyish or any(h in last_event_lower for h in QUEUE_EVENT_HINTS)
+        event_lobbyish_recent = bool(
+            event_lobbyish
+            and (
+                has_recent_lobby
+                or has_recent_lobby_phrase
+                or bool(ui_lobby_waiting_visible)
+            )
+        )
+        event_queueish_recent = bool(
+            event_queueish
+            and (
+                has_recent_queue
+                or has_recent_lobby_phrase
+                or bool(ui_lobby_waiting_visible)
+            )
+        )
         event_loadingish = any(h in last_event_lower for h in LOADING_EVENT_HINTS) or last_event_lower.startswith("loading/")
         event_matchish = (
             any(h in last_event_lower for h in MATCH_EVENT_HINTS)
@@ -4154,8 +4625,66 @@ def main() -> None:
             or "active_engagement" in last_event_lower
         )
 
-        if "playing" in body_class or "in_game" in body_class or "ingame" in body_class:
-            return {"state": "in_match", "reason": "body_class_playing"}
+        body_class_playing = bool(
+            ("playing" in body_class) or ("in_game" in body_class) or ("ingame" in body_class)
+        )
+        queue_lock_active = now_mono < float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0)
+        recent_enemy_signal = bool(
+            is_recent_signal(bot_event_signals.get("enemy_signal_ts", 0.0), 2.4, now_mono)
+            and float(bot_event_signals.get("enemy_signal_confidence", 0.0) or 0.0) >= 0.44
+        )
+        recent_damage_signal = bool(
+            is_recent_signal(bot_event_signals.get("damage_done_signal_ts", 0.0), 3.0, now_mono)
+            or is_recent_signal(bot_event_signals.get("damage_taken_signal_ts", 0.0), 3.0, now_mono)
+        )
+        strong_match_override = bool(
+            has_recent_match
+            and event_matchish
+            and canvas_visible
+            and (
+                recent_enemy_signal
+                or recent_damage_signal
+                or (visual_hint == "in_match" and visual_conf >= 0.66)
+            )
+            and (not ui_lobby_waiting_visible)
+            and (not has_recent_lobby_phrase)
+            and (not event_queueish_recent)
+        )
+
+        if ui_outside_visible:
+            bot_event_signals["outside_phrase_ts"] = now_mono
+            bot_event_signals["death_ts"] = max(
+                float(bot_event_signals.get("death_ts", 0.0) or 0.0),
+                now_mono,
+            )
+            return {"state": "lobby", "reason": "ui_outside_text"}
+
+        if ui_salon_visible and (not lobby_dom):
+            return {"state": "lobby", "reason": "ui_salon_button"}
+
+        # "Estas fuera" should immediately bias to the post-match/lobby flow so
+        # SALON click can happen without waiting for stale match signals to decay.
+        if has_recent_outside_phrase:
+            return {"state": "lobby", "reason": "ocr_outside_phrase"}
+
+        if visual_hint == "death" and visual_conf >= 0.76:
+            return {"state": "lobby", "reason": f"visual_death:{visual_conf:.2f}"}
+
+        if queue_lock_active:
+            if strong_match_override:
+                bot_event_signals["queue_lock_until"] = 0.0
+                bot_event_signals["queue_ts"] = 0.0
+            else:
+                if transition_elapsed is not None and transition_elapsed <= 3.0:
+                    return {"state": "loading", "reason": "queue_lock_during_transition"}
+                return {"state": "lobby", "reason": "queue_lock"}
+        elif has_recent_queue and (ui_lobby_waiting_visible or has_recent_lobby_phrase or event_queueish_recent):
+            if strong_match_override:
+                bot_event_signals["queue_ts"] = 0.0
+            else:
+                if transition_elapsed is not None and transition_elapsed <= 3.0:
+                    return {"state": "loading", "reason": "recent_queue_during_transition"}
+                return {"state": "lobby", "reason": "recent_queue"}
 
         # Lobby evidence should win against stale in-match events, but
         # avoid false lobby flips when vision button detection is noisy.
@@ -4169,10 +4698,47 @@ def main() -> None:
             if transition_elapsed is not None and transition_elapsed <= 2.5:
                 return {"state": "loading", "reason": "vision_play_during_transition"}
             return {"state": "lobby", "reason": f"vision_play:{play_conf:.2f}"}
+        if has_recent_lobby_phrase:
+            if transition_elapsed is not None and transition_elapsed <= 2.5:
+                return {"state": "loading", "reason": "lobby_phrase_during_transition"}
+            if has_recent_match and event_matchish and canvas_visible and (not ui_lobby_waiting_visible):
+                bot_event_signals["queue_lock_until"] = max(
+                    float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0),
+                    now_mono + 3.5,
+                )
+                return {"state": "loading", "reason": "lobby_phrase_vs_match_signal"}
+            return {"state": "lobby", "reason": "ocr_lobby_phrase"}
+        if ui_lobby_waiting_visible:
+            bot_event_signals["queue_lock_until"] = max(
+                float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0),
+                now_mono + 3.5,
+            )
+            if transition_elapsed is not None and transition_elapsed <= 2.5:
+                return {"state": "loading", "reason": "ui_lobby_waiting_during_transition"}
+            return {"state": "lobby", "reason": "ui_lobby_waiting"}
+
+        # body_class=playing can remain stale in queue/lobby overlays; require
+        # extra evidence before forcing in_match.
+        if body_class_playing and canvas_visible:
+            if transition_elapsed is not None and transition_elapsed <= 2.5:
+                return {"state": "loading", "reason": "body_class_playing_during_transition"}
+            if has_recent_lobby and (lobby_signal_newer or event_lobbyish_recent or event_queueish_recent):
+                return {"state": "lobby", "reason": "body_class_playing_but_lobby_signal"}
+            if has_recent_lobby_phrase:
+                return {"state": "lobby", "reason": "body_class_playing_but_lobby_phrase"}
+            if has_recent_loading:
+                return {"state": "loading", "reason": "body_class_playing_but_loading_signal"}
+            if has_recent_match and event_matchish:
+                return {"state": "in_match", "reason": "body_class_playing+match_signal"}
+            if visual_hint == "in_match" and visual_conf >= 0.72:
+                return {"state": "in_match", "reason": f"body_class_playing+visual:{visual_conf:.2f}"}
+            return {"state": "in_match", "reason": "body_class_playing_fallback"}
 
         if has_recent_match and canvas_visible and event_matchish:
             if transition_elapsed is not None and transition_elapsed <= 2.0:
                 return {"state": "loading", "reason": "match_event_during_transition"}
+            if has_recent_lobby or has_recent_loading or has_recent_lobby_phrase or event_queueish_recent:
+                return {"state": "loading", "reason": "match_event_vs_lobby_signal"}
             return {"state": "in_match", "reason": f"event_match:{bot_event_signals.get('last_event_name', '')}"}
 
         if has_recent_lobby and (
@@ -4180,11 +4746,12 @@ def main() -> None:
             or lobby_dom
             or dom_play
             or (vision_play and play_conf >= 0.68)
+            or has_recent_lobby_phrase
         ):
             if transition_elapsed is not None and transition_elapsed <= 3.0:
                 return {"state": "loading", "reason": "recent_lobby_during_transition"}
             if event_matchish and canvas_visible:
-                return {"state": "in_match", "reason": "lobby_signal_overridden_by_match_event"}
+                return {"state": "loading", "reason": "lobby_signal_blocks_match_event"}
             if event_loadingish and canvas_visible and (not lobby_dom) and (not dom_play):
                 return {"state": "loading", "reason": "recent_lobby_loading_event"}
             return {
@@ -4196,13 +4763,16 @@ def main() -> None:
             strong_match_signal = (not has_recent_lobby) or (match_ts > (lobby_ts + 1.6))
             if visual_hint == "in_match" and visual_conf >= 0.60:
                 strong_match_signal = True
-            if event_lobbyish and (not dom_play) and (not lobby_dom):
+            if (event_lobbyish_recent or event_queueish_recent) and (not dom_play) and (not lobby_dom):
                 strong_match_signal = False
             if not strong_match_signal:
                 return {"state": "loading", "reason": "match_signal_weak"}
+            in_match_reason = "match_signal_recent"
+            if event_matchish:
+                in_match_reason = f"event_match:{bot_event_signals.get('last_event_name', '')}"
             return {
                 "state": "in_match",
-                "reason": f"event:{bot_event_signals.get('last_event_name', '')}",
+                "reason": in_match_reason,
             }
 
         if has_recent_lobby and (lobby_signal_newer or (not has_recent_match)):
@@ -4216,16 +4786,24 @@ def main() -> None:
             if elapsed <= 10.0:
                 return {"state": "loading", "reason": "post_play_transition"}
             if elapsed <= 65.0 and canvas_visible:
-                return {"state": "in_match", "reason": "post_play_settle"}
+                if ui_lobby_waiting_visible or has_recent_lobby_phrase:
+                    return {"state": "lobby", "reason": "post_play_settle_lobby_phrase"}
+                if has_recent_lobby and (lobby_signal_newer or event_lobbyish_recent):
+                    return {"state": "lobby", "reason": "post_play_settle_lobby_signal"}
+                if has_recent_match and event_matchish:
+                    return {"state": "in_match", "reason": "post_play_settle_match_signal"}
+                if visual_hint == "in_match" and visual_conf >= 0.68:
+                    return {"state": "in_match", "reason": f"post_play_settle_visual:{visual_conf:.2f}"}
+                return {"state": "loading", "reason": "post_play_settle_waiting_match_signal"}
 
-        if visual_hint == "death" and visual_conf >= 0.76:
-            return {"state": "loading", "reason": f"visual:{visual_hint}:{visual_conf:.2f}"}
         if visual_hint == "in_match" and visual_conf >= 0.72 and canvas_visible:
             return {
                 "state": "in_match",
                 "reason": f"visual:{visual_hint}:{visual_conf:.2f}",
             }
-        if visual_hint == "lobby" and visual_conf >= 0.72 and (not has_recent_match):
+        if visual_hint == "lobby" and visual_conf >= 0.84:
+            if has_recent_match and event_matchish and canvas_visible:
+                return {"state": "loading", "reason": f"visual_lobby_vs_match:{visual_conf:.2f}"}
             return {"state": "lobby", "reason": f"visual:{visual_hint}:{visual_conf:.2f}"}
 
         if has_recent_loading:
@@ -4729,6 +5307,7 @@ def main() -> None:
               <div class="h-row"><span class="h-label">Enemy:</span> <span id="__lmsHudEnemy" class="h-value">seen=0 conf=0.00 dir=-</span></div>
               <div class="h-row"><span class="h-label">Combat:</span> <span id="__lmsHudDamage" class="h-value">out=0 in=0 mana=100</span></div>
               <div class="h-row"><span class="h-label">Zone:</span> <span id="__lmsHudZone" class="h-value">counter=- safe=(-,-,-)</span></div>
+              <div class="h-row"><span class="h-label">Map:</span> <span id="__lmsHudMap" class="h-value">name=- id=- size=-</span></div>
               <div class="h-row"><span class="h-label">Death:</span> <span id="__lmsHudDeath" class="h-value">cause=unknown conf=0.00 src=-</span></div>
               <div class="h-row"><span class="h-label">Abilities:</span> <span id="__lmsHudAbility" class="h-value">last=- class=-</span></div>
               <div class="h-keys">
@@ -4809,6 +5388,10 @@ def main() -> None:
           setText(
             '__lmsHudZone',
             `counter=${safeStr(data.zone_counter || '-')} safe=${safeStr(data.safe_zone || '(-,-,-)')}`
+          );
+          setText(
+            '__lmsHudMap',
+            `name=${safeStr(data.map_name || '-')} id=${safeStr(data.map_id || '-')} size=${safeStr(data.map_size || '-')} src=${safeStr(data.map_source || '-')}`
           );
           setText(
             '__lmsHudDeath',
@@ -5012,6 +5595,36 @@ def main() -> None:
             return str(last_path)
         return None
 
+    def force_capture_feedback_screenshot(
+        session: Optional[Dict[str, Any]],
+        page_obj: Page,
+        label: str,
+        max_screenshots: int,
+        next_interval_sec: float = 0.0,
+        full_page: bool = False,
+    ) -> Optional[str]:
+        if not session:
+            return None
+        max_shots = max(1, int(max_screenshots))
+        current = int(session.get("shot_count", 0))
+        if current >= max_shots:
+            return None
+        shot_index = current + 1
+        safe_label = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in str(label or "tick"))
+        filename = f"{shot_index:04d}_{safe_label}.png"
+        shot_path = Path(session["screen_dir"]) / filename
+        try:
+            page_obj.screenshot(path=str(shot_path), full_page=bool(full_page))
+        except Exception as exc:
+            print(f"[BOT][FEEDBACK][WARN] force screenshot fallo: {exc}")
+            return None
+        now_mono = time.monotonic()
+        session["shot_count"] = shot_index
+        session["last_shot_at"] = now_mono
+        if float(next_interval_sec or 0.0) > 0.0:
+            session["next_shot_at"] = now_mono + float(next_interval_sec)
+        return str(shot_path)
+
     def cooperative_hold_with_feedback(
         session: Optional[Dict[str, Any]],
         page_obj: Page,
@@ -5114,6 +5727,9 @@ def main() -> None:
             "toxic_left_ratio": 0.0,
             "toxic_right_ratio": 0.0,
             "toxic_escape_keys": [],
+            "outside_phrase_detected": False,
+            "salon_detected": False,
+            "queue_phrase_detected": False,
             "names": [],
             "damage_numbers": [],
             "raw_excerpt": "",
@@ -5142,6 +5758,55 @@ def main() -> None:
             if h <= 2 or w <= 2:
                 return result
 
+            def _safe_crop(src: Any, x0: int, y0: int, rw: int, rh: int) -> Any:
+                x1 = min(w, max(1, int(x0) + int(rw)))
+                y1 = min(h, max(1, int(y0) + int(rh)))
+                x0c = max(0, min(w - 1, int(x0)))
+                y0c = max(0, min(h - 1, int(y0)))
+                if x1 <= x0c or y1 <= y0c:
+                    return None
+                out = src[y0c:y1, x0c:x1]
+                if out is None or out.size == 0:
+                    return None
+                return out
+
+            def _ocr_region(crop_img: Any, psm: int, critical: bool = False) -> str:
+                if crop_img is None or crop_img.size == 0:
+                    return ""
+                try:
+                    gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+                except Exception:
+                    return ""
+                scale = 2.0 if critical else 1.6
+                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                blur = cv2.GaussianBlur(gray, (3, 3), 0)
+                if critical:
+                    _, bin_img = cv2.threshold(
+                        blur,
+                        0,
+                        255,
+                        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+                    )
+                else:
+                    bin_img = cv2.adaptiveThreshold(
+                        blur,
+                        255,
+                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                        cv2.THRESH_BINARY,
+                        31,
+                        5,
+                    )
+                t_out = ""
+                try:
+                    t_out = pytesseract.image_to_string(
+                        bin_img,
+                        config=f"--oem 3 --psm {int(psm)}",
+                        timeout=(min(0.09, max(0.04, float(timeout_sec))) if critical else max(0.05, float(timeout_sec))),
+                    )
+                except RuntimeError:
+                    t_out = ""
+                return str(t_out or "").strip()
+
             rois = [
                 (0, 0, w, max(12, int(h * 0.24))),  # top HUD / names
                 (0, int(h * 0.24), w, max(12, int(h * 0.24))),  # mid feed
@@ -5150,34 +5815,22 @@ def main() -> None:
             texts: List[str] = []
             roi_limit = max(1, int(max_rois))
             for x, y, rw, rh in rois[:roi_limit]:
-                x2 = min(w, max(1, x + rw))
-                y2 = min(h, max(1, y + rh))
-                crop = img[y:y2, x:x2]
-                if crop.size == 0:
-                    continue
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC)
-                blur = cv2.GaussianBlur(gray, (3, 3), 0)
-                bin_img = cv2.adaptiveThreshold(
-                    blur,
-                    255,
-                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY,
-                    31,
-                    5,
-                )
-                try:
-                    txt = pytesseract.image_to_string(
-                        bin_img,
-                        config="--oem 3 --psm 6",
-                        timeout=max(0.05, float(timeout_sec)),
-                    )
-                except RuntimeError:
-                    txt = ""
-                if txt and txt.strip():
-                    texts.append(txt.strip())
+                txt = _ocr_region(_safe_crop(img, x, y, rw, rh), psm=6, critical=False)
+                if txt:
+                    texts.append(txt)
 
-            merged = "\n".join(texts).strip()
+            # Always read critical queue/death regions even when max_rois is low.
+            critical_rois = [
+                (0, 0, w, max(12, int(h * 0.18)), 7),  # top queue banner
+                (0, int(h * 0.26), w, max(14, int(h * 0.40)), 6),  # center practice/death text
+                (0, int(h * 0.68), w, max(12, int(h * 0.30)), 7),  # bottom action buttons
+            ]
+            for x, y, rw, rh, psm in critical_rois:
+                txt_critical = _ocr_region(_safe_crop(img, x, y, rw, rh), psm=psm, critical=True)
+                if txt_critical:
+                    texts.append(txt_critical)
+
+            merged = "\n".join([t for t in texts if str(t or "").strip()]).strip()
             if not merged:
                 return result
 
@@ -5188,6 +5841,8 @@ def main() -> None:
                 "jugar",
                 "lobby",
                 "salon",
+                "mazmorra real",
+                "buscando jugadores",
                 "select",
                 "character",
                 "ready",
@@ -5245,7 +5900,20 @@ def main() -> None:
                 "estas fuera",
                 "spectating",
             )
+            lobby_waiting_phrase_detected = detect_lobby_waiting_phrase(lower_norm)
+            queue_phrase_detected = bool(lobby_waiting_phrase_detected)
             lobby_hits = sum(lower_norm.count(token) for token in lobby_tokens)
+            if lobby_waiting_phrase_detected:
+                lobby_hits += 4
+            else:
+                for lobby_phrase in KNOWN_LOBBY_PHRASES:
+                    phrase_norm = normalize_text_for_match(lobby_phrase)
+                    if phrase_norm and (
+                        phrase_norm in lower_norm
+                        or fuzzy_contains_phrase(lower_norm, phrase_norm, threshold=87)
+                    ):
+                        lobby_hits += 3
+                        queue_phrase_detected = True
             in_match_hits = sum(lower_norm.count(token) for token in match_tokens)
             safe_zone_hits = sum(
                 lower_norm.count(normalize_text_for_match(token))
@@ -5256,8 +5924,12 @@ def main() -> None:
                 for token in toxic_zone_tokens
             )
             death_hits = sum(lower_norm.count(token) for token in death_tokens)
-            if fuzzy_contains_phrase(lower_norm, "estas fuera", threshold=89):
+            outside_phrase_detected = detect_outside_phrase(lower_norm)
+            salon_detected = detect_salon_phrase(lower_norm)
+            if outside_phrase_detected:
                 death_hits += 2
+            if salon_detected:
+                death_hits += 1
 
             toxic_color_ratio = 0.0
             toxic_top_ratio = 0.0
@@ -5329,6 +6001,16 @@ def main() -> None:
                 state_hint = "in_match"
                 state_conf = min(0.95, 0.45 + (0.08 * float(in_match_hits)))
 
+            if queue_phrase_detected:
+                state_hint = "lobby"
+                state_conf = max(float(state_conf), 0.86)
+
+            if outside_phrase_detected and salon_detected:
+                state_hint = "death"
+                state_conf = max(float(state_conf), 0.92)
+
+            map_guess = detect_known_map_from_text(lower_norm)
+
             damage_values: List[float] = []
             for match in re.finditer(
                 r"(?:damage|dmg|da[oÃ±]o)[^0-9]{0,10}([0-9]{1,6}(?:[.,][0-9]{1,2})?)",
@@ -5392,7 +6074,14 @@ def main() -> None:
                     "toxic_left_ratio": float(toxic_left_ratio),
                     "toxic_right_ratio": float(toxic_right_ratio),
                     "toxic_escape_keys": list(toxic_escape_keys[:2]),
+                    "outside_phrase_detected": bool(outside_phrase_detected),
+                    "salon_detected": bool(salon_detected),
+                    "queue_phrase_detected": bool(queue_phrase_detected),
                     "death_hits": int(death_hits),
+                    "lobby_phrase_detected": bool(queue_phrase_detected),
+                    "map_id": str(map_guess.get("map_id", "") if map_guess else ""),
+                    "map_name": str(map_guess.get("map_name", "") if map_guess else ""),
+                    "map_size_class": str(map_guess.get("map_size_class", "") if map_guess else ""),
                     "names": name_candidates,
                     "damage_numbers": [float(v) for v in damage_values[:8]],
                     "raw_excerpt": merged[:500],
@@ -8965,6 +9654,24 @@ def main() -> None:
                             "move_max_blocking_hold_ms": int(args.bot_move_max_blocking_hold_ms),
                         },
                     )
+                    bootstrap_shot_path = force_capture_feedback_screenshot(
+                        session=runtime_feedback_session,
+                        page_obj=page,
+                        label="lobby_bootstrap",
+                        max_screenshots=int(args.bot_feedback_max_screenshots),
+                        next_interval_sec=max(0.2, float(feedback_screenshot_interval_sec)),
+                        full_page=False,
+                    )
+                    if bootstrap_shot_path:
+                        force_capture_feedback_screenshot(
+                            session=runtime_feedback_session,
+                            page_obj=page,
+                            label="lobby_bootstrap_confirm",
+                            max_screenshots=int(args.bot_feedback_max_screenshots),
+                            next_interval_sec=max(0.25, float(feedback_screenshot_interval_sec)),
+                            full_page=False,
+                        )
+                    runtime_feedback_session["bootstrap_captured"] = bool(bootstrap_shot_path)
                 cursor_overlay_ready = False
                 cursor_overlay_last_retry_at = 0.0
                 cursor_probe_last_log_at = 0.0
@@ -9064,6 +9771,7 @@ def main() -> None:
                 telemetry_prev_click_count = 0
                 telemetry_damage_out_proxy_total = 0.0
                 telemetry_prev_hp_pct: Optional[float] = None
+                telemetry_last_emit_mono = 0.0
                 telemetry_monitor = create_runtime_telemetry_monitor()
                 last_tick_telemetry: Optional[Dict[str, Any]] = None
                 knowledge_prev_move_action = ""
@@ -9184,12 +9892,17 @@ def main() -> None:
                     "death_streak": 0,
                 }
                 run_stop_reason = ""
+                runtime_feedback_bootstrap_captured = bool(
+                    runtime_feedback_session.get("bootstrap_captured", False)
+                ) if runtime_feedback_session else False
                 match_opening_until = 0.0
                 opening_move_index = 0
                 collision_streak = 0
                 last_salon_attempt_at = 0.0
+                salon_click_cooldown_until = 0.0
                 death_salon_attempted = False
                 death_pending_since = 0.0
+                death_metrics_capture_ts = 0.0
                 last_recorded_death_ts = 0.0
                 last_recorded_loot_ts = 0.0
                 last_guardian_obs_sig = ""
@@ -9318,6 +10031,9 @@ def main() -> None:
                             forced_move_queue.clear()
                             death_salon_attempted = False
                             death_pending_since = 0.0
+                            bot_event_signals["outside_phrase_ts"] = 0.0
+                            bot_event_signals["queue_ts"] = 0.0
+                            bot_event_signals["queue_lock_until"] = 0.0
                             if bool(args.bot_runtime_probe) and (not runtime_probe_match_done):
                                 try:
                                     probe_snapshot = collect_runtime_variable_probe(
@@ -9489,6 +10205,10 @@ def main() -> None:
                                 "damage_done": float(bot_event_signals.get("damage_done_total", 0.0) or 0.0),
                                 "damage_taken": float(bot_event_signals.get("damage_taken_total", 0.0) or 0.0),
                                 "mana": float(ability_state.get("mana", 0.0) or 0.0),
+                                "map_id": str(bot_event_signals.get("map_id", "") or ""),
+                                "map_name": str(bot_event_signals.get("map_name", "") or ""),
+                                "map_size": str(bot_event_signals.get("map_size_class", "") or ""),
+                                "map_source": str(bot_event_signals.get("map_signal_source", "none") or "none"),
                                 "zone_counter": (
                                     "-"
                                     if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0
@@ -9533,8 +10253,45 @@ def main() -> None:
                             )
                             if death_pending_since <= 0.0:
                                 death_pending_since = now_mono
+                            if (
+                                runtime_feedback_session
+                                and ((now_mono - float(death_metrics_capture_ts or 0.0)) >= 0.8)
+                            ):
+                                forced_death_path = force_capture_feedback_screenshot(
+                                    session=runtime_feedback_session,
+                                    page_obj=page,
+                                    label=f"death_{last_action_label}",
+                                    max_screenshots=int(args.bot_feedback_max_screenshots),
+                                    next_interval_sec=0.35,
+                                    full_page=False,
+                                )
+                                if forced_death_path:
+                                    death_metrics_capture_ts = now_mono
+                                    if args.bot_visual_ocr and (not bool(visual_ocr_state.get("disabled", False))):
+                                        death_ocr_now = extract_visual_feedback_from_screenshot(
+                                            image_path=forced_death_path,
+                                            max_names=int(args.bot_visual_ocr_max_names),
+                                            timeout_sec=float(args.bot_visual_ocr_timeout_sec),
+                                            max_rois=max(3, int(args.bot_visual_ocr_max_rois)),
+                                        )
+                                        visual_ocr_state["last_result"] = dict(death_ocr_now)
+                                        visual_feedback_for_event = dict(death_ocr_now)
+                                        if bool(death_ocr_now.get("outside_phrase_detected", False)):
+                                            bot_event_signals["outside_phrase_ts"] = now_mono
                             salon_clicked = False
-                            if (now_mono - last_salon_attempt_at) >= 0.8:
+                            outside_phrase_active = is_recent_signal(
+                                bot_event_signals.get("outside_phrase_ts", 0.0),
+                                10.0,
+                                now_mono,
+                            )
+                            salon_attempt_min_gap = 0.18 if outside_phrase_active else 1.2
+                            if (
+                                (now_mono >= float(salon_click_cooldown_until))
+                                and (
+                                    outside_phrase_active
+                                    or ((now_mono - last_salon_attempt_at) >= salon_attempt_min_gap)
+                                )
+                            ):
                                 death_salon_attempted = True
                                 salon_clicked = click_first_visible_in_frame(
                                     game_actual_frame,
@@ -9582,6 +10339,13 @@ def main() -> None:
                                             break
                                 last_salon_attempt_at = now_mono
                                 if salon_clicked:
+                                    salon_click_cooldown_until = now_mono + 1.8
+                                else:
+                                    salon_click_cooldown_until = now_mono + (
+                                        0.35 if outside_phrase_active else 0.95
+                                    )
+                                if salon_clicked:
+                                    bot_event_signals["outside_phrase_ts"] = 0.0
                                     print("[BOT][DEATH] Click en SALON confirmado antes de cerrar corrida.")
                             death_grace_sec = max(
                                 3.0,
@@ -9615,6 +10379,18 @@ def main() -> None:
                             break
 
                     if bot_state == "lobby":
+                        if runtime_feedback_session and (not runtime_feedback_bootstrap_captured):
+                            bootstrap_path = force_capture_feedback_screenshot(
+                                session=runtime_feedback_session,
+                                page_obj=page,
+                                label="lobby_bootstrap",
+                                max_screenshots=int(args.bot_feedback_max_screenshots),
+                                next_interval_sec=max(0.2, float(feedback_screenshot_interval_sec)),
+                                full_page=False,
+                            )
+                            if bootstrap_path:
+                                runtime_feedback_bootstrap_captured = True
+
                         if play_transition_started_at is not None and (now_mono - play_transition_started_at) > 12.0:
                             print("[BOT][WARN] Click en JUGAR sin transicion; reintentando.")
                             play_transition_started_at = None
@@ -9626,12 +10402,24 @@ def main() -> None:
                             and float(bot_event_signals.get("visual_state_confidence", 0.0) or 0.0) >= 0.62
                         )
                         death_signal_active = bool(
-                            float(bot_event_signals.get("death_ts", 0.0) or 0.0) > 0.0 or death_visual_active
+                            float(bot_event_signals.get("death_ts", 0.0) or 0.0) > 0.0
+                            or death_visual_active
+                            or is_recent_signal(bot_event_signals.get("outside_phrase_ts", 0.0), 12.0, now_mono)
                         )
+                        outside_phrase_active = is_recent_signal(
+                            bot_event_signals.get("outside_phrase_ts", 0.0),
+                            12.0,
+                            now_mono,
+                        )
+                        salon_attempt_min_gap = 0.22 if outside_phrase_active else 1.25
                         if (
                             (not did_ui_action)
                             and death_signal_active
-                            and ((now_mono - last_salon_attempt_at) >= 0.8)
+                            and (now_mono >= float(salon_click_cooldown_until))
+                            and (
+                                outside_phrase_active
+                                or ((now_mono - last_salon_attempt_at) >= salon_attempt_min_gap)
+                            )
                         ):
                             last_action_label = "lobby:salon_click"
                             did_ui_action = click_first_visible_in_frame(
@@ -9681,7 +10469,14 @@ def main() -> None:
                             last_action_ok = bool(did_ui_action)
                             last_salon_attempt_at = now_mono
                             if did_ui_action:
+                                salon_click_cooldown_until = now_mono + 2.0
+                            else:
+                                salon_click_cooldown_until = now_mono + (
+                                    0.45 if outside_phrase_active else 1.0
+                                )
+                            if did_ui_action:
                                 bot_event_signals["death_ts"] = 0.0
+                                bot_event_signals["outside_phrase_ts"] = 0.0
                                 print("[BOT] SALON detectado y clickeado para volver al lobby.")
 
                         if (not did_ui_action) and ui_state.get("character_visible"):
@@ -11002,31 +11797,171 @@ def main() -> None:
                     post_input_probe = read_input_feedback_probe(game_actual_frame)
                     post_click_probe = read_click_probe(game_actual_frame)
                     post_cursor_probe = read_bot_cursor_probe(game_actual_frame)
-                    shot_path = maybe_capture_feedback_screenshot(
-                        session=runtime_feedback_session,
-                        page_obj=page,
-                        now_mono=time.monotonic(),
-                        every_sec=float(feedback_screenshot_interval_sec),
-                        max_screenshots=int(args.bot_feedback_max_screenshots),
-                        max_burst=int(args.bot_feedback_max_burst_per_loop),
-                        label=f"{bot_state}_{last_action_label}",
-                        full_page=False,
+                    runtime_capture_every_sec = float(feedback_screenshot_interval_sec)
+                    runtime_capture_max_burst = int(args.bot_feedback_max_burst_per_loop)
+                    outside_phrase_active = is_recent_signal(
+                        bot_event_signals.get("outside_phrase_ts", 0.0),
+                        16.0,
+                        now_mono,
                     )
+                    lobby_phrase_active = is_recent_signal(
+                        bot_event_signals.get("lobby_phrase_ts", 0.0),
+                        18.0,
+                        now_mono,
+                    )
+                    outside_phrase_lock_active = (
+                        now_mono < float(bot_event_signals.get("outside_phrase_lock_until", 0.0) or 0.0)
+                    )
+                    lobby_phrase_lock_active = (
+                        now_mono < float(bot_event_signals.get("lobby_phrase_lock_until", 0.0) or 0.0)
+                    )
+                    queue_lock_active = (
+                        now_mono < float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0)
+                    )
+                    if runtime_capture_every_sec > 0.0:
+                        if outside_phrase_active:
+                            runtime_capture_every_sec = max(runtime_capture_every_sec, 2.5)
+                            runtime_capture_max_burst = 1
+                        elif lobby_phrase_active:
+                            runtime_capture_every_sec = max(runtime_capture_every_sec, 2.0)
+                            runtime_capture_max_burst = 1
+                        elif queue_lock_active:
+                            runtime_capture_every_sec = max(runtime_capture_every_sec, 1.8)
+                            runtime_capture_max_burst = 1
+                        elif str(bot_state or "") == "lobby":
+                            runtime_capture_every_sec = max(runtime_capture_every_sec, 1.4)
+                            runtime_capture_max_burst = min(runtime_capture_max_burst, 1)
+                        elif str(bot_state or "") != "in_match":
+                            runtime_capture_every_sec = max(runtime_capture_every_sec, 1.0)
+                            runtime_capture_max_burst = min(runtime_capture_max_burst, 1)
+                    outside_ui_active = bool(ui_state.get("outside_text_visible")) or bool(
+                        ui_state.get("salon_visible")
+                    )
+                    lobby_waiting_ui_active = bool(ui_state.get("lobby_waiting_visible"))
+                    lobby_visual_active = bool(
+                        is_recent_signal(bot_event_signals.get("visual_ocr_ts", 0.0), 12.0, now_mono)
+                        and str(bot_event_signals.get("visual_state_hint", "unknown") or "unknown").lower() == "lobby"
+                        and float(bot_event_signals.get("visual_state_confidence", 0.0) or 0.0) >= 0.84
+                    )
+                    capture_state_label = str(bot_state or "unknown")
+                    if (
+                        outside_ui_active
+                        or outside_phrase_active
+                        or is_recent_signal(bot_event_signals.get("death_ts", 0.0), 10.0, now_mono)
+                    ):
+                        capture_state_label = "death"
+                    elif (
+                        lobby_waiting_ui_active
+                        or lobby_phrase_active
+                        or lobby_visual_active
+                        or queue_lock_active
+                    ):
+                        capture_state_label = "lobby"
+                    elif (
+                        capture_state_label == "in_match"
+                        and (play_transition_started_at is not None)
+                        and ((now_mono - play_transition_started_at) <= 3.0)
+                    ):
+                        capture_state_label = "loading"
+                    shot_path: Optional[str] = None
+                    early_shot_count = int(
+                        runtime_feedback_session.get("shot_count", 0)
+                        if isinstance(runtime_feedback_session, dict)
+                        else 0
+                    )
+                    if (
+                        runtime_feedback_session
+                        and early_shot_count == 1
+                        and capture_state_label in ("lobby", "loading")
+                    ):
+                        shot_path = force_capture_feedback_screenshot(
+                            session=runtime_feedback_session,
+                            page_obj=page,
+                            label=f"{capture_state_label}_bootstrap_confirm",
+                            max_screenshots=int(args.bot_feedback_max_screenshots),
+                            next_interval_sec=max(0.25, float(runtime_capture_every_sec)),
+                            full_page=False,
+                        )
+                    if not shot_path:
+                        shot_path = maybe_capture_feedback_screenshot(
+                            session=runtime_feedback_session,
+                            page_obj=page,
+                            now_mono=time.monotonic(),
+                            every_sec=runtime_capture_every_sec,
+                            max_screenshots=int(args.bot_feedback_max_screenshots),
+                            max_burst=runtime_capture_max_burst,
+                            label=f"{capture_state_label}_{last_action_label}",
+                            full_page=False,
+                        )
                     if (not shot_path) and hold_capture_path:
                         shot_path = hold_capture_path
+                    death_capture_needed = bool(
+                        (
+                            outside_ui_active
+                            or outside_phrase_active
+                            or is_recent_signal(bot_event_signals.get("death_ts", 0.0), 10.0, now_mono)
+                        )
+                        and ((now_mono - float(death_metrics_capture_ts or 0.0)) >= 8.0)
+                    )
+                    if death_capture_needed and (not shot_path):
+                        forced_death_path = force_capture_feedback_screenshot(
+                            session=runtime_feedback_session,
+                            page_obj=page,
+                            label=f"death_{last_action_label}",
+                            max_screenshots=int(args.bot_feedback_max_screenshots),
+                            next_interval_sec=max(0.4, float(runtime_capture_every_sec)),
+                            full_page=False,
+                        )
+                        if forced_death_path:
+                            shot_path = forced_death_path
+                            death_metrics_capture_ts = now_mono
+                    elif death_capture_needed and shot_path:
+                        death_metrics_capture_ts = now_mono
                     if args.bot_visual_ocr and (not bool(visual_ocr_state.get("disabled", False))) and shot_path:
                         ocr_interval = max(0.3, float(args.bot_visual_ocr_every_sec))
+                        ocr_max_rois_runtime = int(args.bot_visual_ocr_max_rois)
+                        force_death_ocr = bool(
+                            (outside_ui_active or outside_phrase_active)
+                            and (
+                                bot_event_signals.get("match_end_time_alive_sec") is None
+                                or bot_event_signals.get("match_end_eliminations") is None
+                                or bot_event_signals.get("match_end_objects_built") is None
+                            )
+                        )
+                        if outside_phrase_active:
+                            ocr_interval = max(ocr_interval, 1.6)
+                            ocr_max_rois_runtime = max(3, ocr_max_rois_runtime)
+                        elif lobby_phrase_active:
+                            ocr_interval = max(ocr_interval, 1.9)
+                            ocr_max_rois_runtime = max(2, min(ocr_max_rois_runtime, 3))
+                        elif queue_lock_active:
+                            ocr_interval = max(ocr_interval, 1.7)
+                            ocr_max_rois_runtime = max(2, min(ocr_max_rois_runtime, 3))
+                        elif str(bot_state or "") == "lobby":
+                            ocr_interval = max(ocr_interval, 1.5)
+                            ocr_max_rois_runtime = max(2, min(ocr_max_rois_runtime, 3))
+                        elif str(bot_state or "") != "in_match":
+                            ocr_interval = max(ocr_interval, 1.2)
+                            ocr_max_rois_runtime = min(ocr_max_rois_runtime, 3)
                         ocr_max_frames = max(1, int(args.bot_visual_ocr_max_frames))
+                        ocr_phrase_lock_active = (
+                            (outside_phrase_active and outside_phrase_lock_active)
+                            or (lobby_phrase_active and lobby_phrase_lock_active and (not queue_lock_active))
+                        )
+                        if force_death_ocr:
+                            ocr_interval = min(ocr_interval, 0.35)
+                            ocr_max_rois_runtime = max(3, ocr_max_rois_runtime)
                         can_run_ocr = (
                             (now_mono - float(visual_ocr_state.get("last_ocr_at", 0.0))) >= ocr_interval
                             and int(visual_ocr_state.get("frames", 0)) < ocr_max_frames
+                            and ((not ocr_phrase_lock_active) or force_death_ocr)
                         )
                         if can_run_ocr:
                             visual_ocr_now = extract_visual_feedback_from_screenshot(
                                 image_path=shot_path,
                                 max_names=int(args.bot_visual_ocr_max_names),
                                 timeout_sec=float(args.bot_visual_ocr_timeout_sec),
-                                max_rois=int(args.bot_visual_ocr_max_rois),
+                                max_rois=ocr_max_rois_runtime,
                             )
                             visual_ocr_state["last_ocr_at"] = now_mono
                             visual_ocr_state["frames"] = int(visual_ocr_state.get("frames", 0)) + 1
@@ -11038,6 +11973,63 @@ def main() -> None:
                                     visual_ocr_now.get("state_confidence", 0.0) or 0.0
                                 )
                                 bot_event_signals["visual_ocr_ts"] = now_mono
+                                queue_phrase_now = bool(
+                                    visual_ocr_now.get("queue_phrase_detected", False)
+                                    or visual_ocr_now.get("lobby_phrase_detected", False)
+                                )
+                                if queue_phrase_now:
+                                    lobby_lock_until = float(
+                                        bot_event_signals.get("lobby_phrase_lock_until", 0.0) or 0.0
+                                    )
+                                    if now_mono >= lobby_lock_until:
+                                        bot_event_signals["lobby_phrase_ts"] = now_mono
+                                        bot_event_signals["lobby_ts"] = max(
+                                            float(bot_event_signals.get("lobby_ts", 0.0) or 0.0),
+                                            now_mono,
+                                        )
+                                        bot_event_signals["lobby_phrase_lock_until"] = now_mono + 10.0
+                                    bot_event_signals["queue_ts"] = now_mono
+                                    bot_event_signals["queue_lock_until"] = max(
+                                        float(bot_event_signals.get("queue_lock_until", 0.0) or 0.0),
+                                        now_mono + 3.8,
+                                    )
+                                outside_phrase_now = bool(visual_ocr_now.get("outside_phrase_detected", False))
+                                salon_only_now = bool(visual_ocr_now.get("salon_detected", False))
+                                if (not outside_phrase_now) and salon_only_now:
+                                    death_hits_now = int(visual_ocr_now.get("death_hits", 0) or 0)
+                                    visual_state_now = str(visual_ocr_now.get("state_hint", "unknown") or "unknown").lower()
+                                    if (death_hits_now >= 2) or (visual_state_now == "death"):
+                                        outside_phrase_now = True
+                                if outside_phrase_now:
+                                    outside_lock_until = float(
+                                        bot_event_signals.get("outside_phrase_lock_until", 0.0) or 0.0
+                                    )
+                                    if now_mono >= outside_lock_until:
+                                        bot_event_signals["outside_phrase_ts"] = now_mono
+                                        bot_event_signals["death_ts"] = max(
+                                            float(bot_event_signals.get("death_ts", 0.0) or 0.0),
+                                            now_mono,
+                                        )
+                                        bot_event_signals["outside_phrase_lock_until"] = now_mono + 12.0
+                                        refresh_death_cause_context(
+                                            now_mono=now_mono,
+                                            enemy_recent=bool(enemy_for_feedback.get("recent", enemy_for_feedback.get("detected", False))),
+                                            zone_outside_safe=bool(bot_event_signals.get("zone_outside_safe", False)),
+                                            zone_toxic_detected=bool(bot_event_signals.get("zone_toxic_detected", False)),
+                                            visual_feedback=visual_ocr_now,
+                                        )
+                                map_id_ocr = str(visual_ocr_now.get("map_id", "") or "").strip()
+                                map_name_ocr = str(visual_ocr_now.get("map_name", "") or "").strip()
+                                map_size_ocr = str(visual_ocr_now.get("map_size_class", "") or "").strip().lower()
+                                if map_id_ocr or map_name_ocr:
+                                    if map_id_ocr:
+                                        bot_event_signals["map_id"] = map_id_ocr
+                                    if map_name_ocr:
+                                        bot_event_signals["map_name"] = map_name_ocr
+                                    if map_size_ocr:
+                                        bot_event_signals["map_size_class"] = map_size_ocr
+                                    bot_event_signals["map_signal_source"] = "vision_ocr"
+                                    bot_event_signals["map_signal_ts"] = now_mono
                                 visual_names = [
                                     str(name).strip()
                                     for name in (visual_ocr_now.get("names", []) or [])
@@ -11059,6 +12051,19 @@ def main() -> None:
                                     bot_event_signals["visual_damage_hint"] = max(dmg_nums)
                                 raw_excerpt = str(visual_ocr_now.get("raw_excerpt", "") or "")
                                 if raw_excerpt:
+                                    map_guess = detect_known_map_from_text(raw_excerpt)
+                                    if map_guess is not None:
+                                        guessed_id = str(map_guess.get("map_id", "") or "")
+                                        guessed_name = str(map_guess.get("map_name", "") or "")
+                                        guessed_size = str(map_guess.get("map_size_class", "") or "")
+                                        if guessed_id:
+                                            bot_event_signals["map_id"] = guessed_id
+                                        if guessed_name:
+                                            bot_event_signals["map_name"] = guessed_name
+                                        if guessed_size:
+                                            bot_event_signals["map_size_class"] = guessed_size
+                                        bot_event_signals["map_signal_source"] = str(map_guess.get("source", "ocr_map_name"))
+                                        bot_event_signals["map_signal_ts"] = now_mono
                                     hp_match = re.search(r"\bhp\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)", raw_excerpt, flags=re.IGNORECASE)
                                     if hp_match:
                                         hp_now = float(hp_match.group(1))
@@ -11078,6 +12083,13 @@ def main() -> None:
                                         in_total = float(in_match.group(1))
                                         if in_total >= 0.0:
                                             accumulate_metric_with_reset("damage_taken", in_total, source="ocr", now_mono=now_mono)
+                                    end_metrics = extract_end_metrics_from_text(raw_excerpt)
+                                    if end_metrics.get("time_alive_sec") is not None:
+                                        bot_event_signals["match_end_time_alive_sec"] = int(end_metrics["time_alive_sec"])
+                                    if end_metrics.get("eliminations") is not None:
+                                        bot_event_signals["match_end_eliminations"] = int(end_metrics["eliminations"])
+                                    if end_metrics.get("objects_built") is not None:
+                                        bot_event_signals["match_end_objects_built"] = int(end_metrics["objects_built"])
                                 safe_zone_hits_now = int(visual_ocr_now.get("safe_zone_hits", 0) or 0)
                                 toxic_zone_hits_now = int(visual_ocr_now.get("toxic_zone_hits", 0) or 0)
                                 toxic_color_ratio_now = float(visual_ocr_now.get("toxic_color_ratio", 0.0) or 0.0)
@@ -11417,45 +12429,119 @@ def main() -> None:
                             if ally_count_now <= 0:
                                 ally_count_now = 1 + int(extra_allies_added)
 
-                            telemetry_writer.maybe_emit(
-                                LiveTelemetryFrame(
-                                    ts_ms=int(time.time() * 1000),
-                                    run_id=str(telemetry_run_id or ""),
-                                    match_id=str(telemetry_match_id or ""),
-                                    hp_pct=hp_pct,
-                                    hp_conf=hp_conf,
-                                    hp_src=hp_src,
-                                    stamina_pct=stamina_pct,
-                                    stamina_conf=0.60,
-                                    stamina_src="heur",
-                                    dmg_in_total=current_damage_taken_total,
-                                    dmg_out_total=telemetry_dmg_out_total,
-                                    dmg_in_tick=max(0.0, float(damage_taken_delta)),
-                                    dmg_out_tick=telemetry_dmg_out_tick,
-                                    enemy_visible=enemy_visible_now,
-                                    enemy_conf=enemy_conf_now,
-                                    enemy_dir_deg=None,
-                                    enemy_xy=enemy_xy,
-                                    enemy_dist_norm=enemy_dist_norm,
-                                    enemy_age_ms=enemy_age_ms,
-                                    ally_count=ally_count_now,
-                                    enemy_count=enemy_count_now,
-                                    zone_outside=bool(bot_event_signals.get("zone_outside_safe", False)),
-                                    zone_toxic=bool(bot_event_signals.get("zone_toxic_detected", False)),
-                                    zone_countdown_s=(
-                                        None
-                                        if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0.0
-                                        else float(bot_event_signals.get("zone_countdown_sec", 0.0) or 0.0)
-                                    ),
-                                    decision=str(bot_state or ""),
-                                    action_last=str(last_action_label or ""),
-                                    action_ok=(None if last_action_ok is None else bool(last_action_ok)),
-                                    motion_score=float(motion_eval),
-                                    stuck=bool(move_stuck_now),
-                                    collision_proxy=bool(move_stuck_now),
-                                    entities=entities_payload,
-                                )
+                            phase_name_now = str(bot_state or "unknown").strip().lower() or "unknown"
+                            phase_conf_now = max(
+                                0.0,
+                                min(1.0, float(bot_event_signals.get("visual_state_confidence", 0.0) or 0.0)),
                             )
+                            phase_reason_now = str(state_reason or "runtime_state")
+                            if is_recent_signal(bot_event_signals.get("death_ts", 0.0), 8.0, now_mono):
+                                phase_name_now = "dead"
+                                phase_conf_now = max(phase_conf_now, 0.85)
+                                phase_reason_now = "recent_death_signal"
+                            if is_recent_signal(bot_event_signals.get("match_end_ts", 0.0), 18.0, now_mono):
+                                phase_name_now = "end_of_combat"
+                                phase_conf_now = max(phase_conf_now, 0.88)
+                                phase_reason_now = "recent_match_end_signal"
+                            if is_recent_signal(bot_event_signals.get("lobby_phrase_ts", 0.0), 18.0, now_mono):
+                                phase_name_now = "lobby"
+                                phase_conf_now = max(phase_conf_now, 0.90)
+                                phase_reason_now = "ocr_lobby_phrase"
+                            if is_recent_signal(bot_event_signals.get("queue_ts", 0.0), 16.0, now_mono):
+                                phase_name_now = "lobby"
+                                phase_conf_now = max(phase_conf_now, 0.92)
+                                phase_reason_now = "queue_waiting_signal"
+                            bot_event_signals["game_phase"] = phase_name_now
+                            bot_event_signals["phase_confidence"] = phase_conf_now
+                            bot_event_signals["phase_reason"] = phase_reason_now
+
+                            map_id_now = str(bot_event_signals.get("map_id", "") or "").strip()
+                            map_name_now = str(bot_event_signals.get("map_name", "") or "").strip()
+                            if (not map_name_now) and map_id_now:
+                                map_name_now = str(map_id_now).replace("_", " ").upper()
+
+                            telemetry_cap_hz = max(
+                                0.2,
+                                float(getattr(args, "telemetry_rate_hz", 10.0) or 10.0),
+                            )
+                            outside_phrase_recent = is_recent_signal(
+                                bot_event_signals.get("outside_phrase_ts", 0.0),
+                                14.0,
+                                now_mono,
+                            )
+                            if outside_phrase_recent or phase_name_now in ("dead", "end_of_combat"):
+                                telemetry_target_hz = min(telemetry_cap_hz, 0.8)
+                            elif str(bot_state or "") == "lobby":
+                                telemetry_target_hz = min(telemetry_cap_hz, 1.2)
+                            elif str(bot_state or "") != "in_match":
+                                telemetry_target_hz = min(telemetry_cap_hz, 2.0)
+                            else:
+                                telemetry_target_hz = telemetry_cap_hz
+
+                            telemetry_emit_period = 1.0 / max(0.2, telemetry_target_hz)
+                            if (now_mono - float(telemetry_last_emit_mono)) >= telemetry_emit_period:
+                                emitted = telemetry_writer.maybe_emit(
+                                    LiveTelemetryFrame(
+                                        ts_ms=int(time.time() * 1000),
+                                        run_id=str(telemetry_run_id or ""),
+                                        match_id=str(telemetry_match_id or ""),
+                                        hp_pct=hp_pct,
+                                        hp_conf=hp_conf,
+                                        hp_src=hp_src,
+                                        stamina_pct=stamina_pct,
+                                        stamina_conf=0.60,
+                                        stamina_src="heur",
+                                        dmg_in_total=current_damage_taken_total,
+                                        dmg_out_total=telemetry_dmg_out_total,
+                                        dmg_in_tick=max(0.0, float(damage_taken_delta)),
+                                        dmg_out_tick=telemetry_dmg_out_tick,
+                                        enemy_visible=enemy_visible_now,
+                                        enemy_conf=enemy_conf_now,
+                                        enemy_dir_deg=None,
+                                        enemy_xy=enemy_xy,
+                                        enemy_dist_norm=enemy_dist_norm,
+                                        enemy_age_ms=enemy_age_ms,
+                                        ally_count=ally_count_now,
+                                        enemy_count=enemy_count_now,
+                                        zone_outside=bool(bot_event_signals.get("zone_outside_safe", False)),
+                                        zone_toxic=bool(bot_event_signals.get("zone_toxic_detected", False)),
+                                        zone_countdown_s=(
+                                            None
+                                            if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0.0
+                                            else float(bot_event_signals.get("zone_countdown_sec", 0.0) or 0.0)
+                                        ),
+                                        decision=str(bot_state or ""),
+                                        action_last=str(last_action_label or ""),
+                                        action_ok=(None if last_action_ok is None else bool(last_action_ok)),
+                                        game_phase=phase_name_now,
+                                        phase_confidence=phase_conf_now,
+                                        phase_reason=phase_reason_now,
+                                        map_id=map_id_now,
+                                        map_name=map_name_now,
+                                        map_size_class=str(bot_event_signals.get("map_size_class", "") or ""),
+                                        end_time_alive_sec=(
+                                            None
+                                            if bot_event_signals.get("match_end_time_alive_sec") is None
+                                            else int(bot_event_signals.get("match_end_time_alive_sec"))
+                                        ),
+                                        end_eliminations=(
+                                            None
+                                            if bot_event_signals.get("match_end_eliminations") is None
+                                            else int(bot_event_signals.get("match_end_eliminations"))
+                                        ),
+                                        end_objects_built=(
+                                            None
+                                            if bot_event_signals.get("match_end_objects_built") is None
+                                            else int(bot_event_signals.get("match_end_objects_built"))
+                                        ),
+                                        motion_score=float(motion_eval),
+                                        stuck=bool(move_stuck_now),
+                                        collision_proxy=bool(move_stuck_now),
+                                        entities=entities_payload,
+                                    )
+                                )
+                                if emitted:
+                                    telemetry_last_emit_mono = now_mono
                         except Exception as exc:
                             if int(time.time()) % 20 == 0:
                                 print(f"[BOT][TELEMETRY][WARN] emit fallo: {exc}")
@@ -11791,6 +12877,23 @@ def main() -> None:
                                 "attacker_name": str(bot_event_signals.get("death_attacker_name", "") or ""),
                                 "attacker_is_bot": bot_event_signals.get("death_attacker_is_bot"),
                             },
+                            "match_end": {
+                                "time_alive_sec": (
+                                    None
+                                    if bot_event_signals.get("match_end_time_alive_sec") is None
+                                    else int(bot_event_signals.get("match_end_time_alive_sec"))
+                                ),
+                                "eliminations": (
+                                    None
+                                    if bot_event_signals.get("match_end_eliminations") is None
+                                    else int(bot_event_signals.get("match_end_eliminations"))
+                                ),
+                                "objects_built": (
+                                    None
+                                    if bot_event_signals.get("match_end_objects_built") is None
+                                    else int(bot_event_signals.get("match_end_objects_built"))
+                                ),
+                            },
                             "guardian": {
                                 "self": str(bot_event_signals.get("own_guardian", "") or ""),
                                 "enemy": str(bot_event_signals.get("enemy_guardian", "") or ""),
@@ -11832,6 +12935,17 @@ def main() -> None:
                                 "count": int(bot_event_signals.get("loot_count", 0) or 0),
                             },
                             "visual_ocr": visual_feedback_for_event,
+                            "game_phase": str(bot_event_signals.get("game_phase", bot_state) or bot_state),
+                            "phase_confidence": float(bot_event_signals.get("phase_confidence", 0.0) or 0.0),
+                            "phase_reason": str(bot_event_signals.get("phase_reason", state_reason) or state_reason),
+                            "map_id": str(bot_event_signals.get("map_id", "") or ""),
+                            "map_name": str(bot_event_signals.get("map_name", "") or ""),
+                            "map_size_class": str(bot_event_signals.get("map_size_class", "") or ""),
+                            "match_end": {
+                                "time_alive_sec": bot_event_signals.get("match_end_time_alive_sec"),
+                                "eliminations": bot_event_signals.get("match_end_eliminations"),
+                                "objects_built": bot_event_signals.get("match_end_objects_built"),
+                            },
                             "cursor_probe": post_cursor_probe,
                             "click_probe": post_click_probe,
                             "input_probe": post_input_probe,
@@ -11870,6 +12984,10 @@ def main() -> None:
                                 "damage_done": float(bot_event_signals.get("damage_done_total", 0.0) or 0.0),
                                 "damage_taken": float(bot_event_signals.get("damage_taken_total", 0.0) or 0.0),
                                 "mana": float(ability_state.get("mana", 0.0) or 0.0),
+                                "map_id": str(bot_event_signals.get("map_id", "") or ""),
+                                "map_name": str(bot_event_signals.get("map_name", "") or ""),
+                                "map_size": str(bot_event_signals.get("map_size_class", "") or ""),
+                                "map_source": str(bot_event_signals.get("map_signal_source", "none") or "none"),
                                 "zone_counter": (
                                     "-"
                                     if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0
@@ -12002,6 +13120,129 @@ def main() -> None:
                     telemetry_monitor,
                     latest_snapshot=final_telemetry_snapshot,
                 )
+                if bot_event_signals.get("match_end_time_alive_sec") is None:
+                    if float(last_in_match_entered_at or 0.0) > 0.0:
+                        alive_guess = max(0, int(round(time.monotonic() - float(last_in_match_entered_at))))
+                    else:
+                        alive_guess = max(0, int(round(time.monotonic() - float(run_started_at))))
+                    bot_event_signals["match_end_time_alive_sec"] = int(alive_guess)
+                if bot_event_signals.get("match_end_eliminations") is None:
+                    bot_event_signals["match_end_eliminations"] = 0
+                if bot_event_signals.get("match_end_objects_built") is None:
+                    bot_event_signals["match_end_objects_built"] = 0
+                if telemetry_writer is not None and LiveTelemetryFrame is not None:
+                    try:
+                        final_now_mono = time.monotonic()
+                        health_max_final = float(bot_event_signals.get("health_max", 100.0) or 100.0)
+                        health_cur_final = float(bot_event_signals.get("health_current", 0.0) or 0.0)
+                        hp_pct_final = (
+                            max(0.0, min(100.0, (health_cur_final / max(1.0, health_max_final)) * 100.0))
+                            if health_max_final > 0.0
+                            else None
+                        )
+                        enemy_conf_final = float(enemy_signal_cache.get("confidence", 0.0) or 0.0)
+                        enemy_visible_final = bool(
+                            enemy_signal_cache.get("recent", enemy_signal_cache.get("detected", False))
+                        )
+                        ex_final = enemy_signal_cache.get("x_ratio")
+                        ey_final = enemy_signal_cache.get("y_ratio")
+                        enemy_xy_final = None
+                        if ex_final is not None and ey_final is not None:
+                            enemy_xy_final = (
+                                max(0.0, min(1.0, float(ex_final))),
+                                max(0.0, min(1.0, float(ey_final))),
+                            )
+                        hp_src_raw = str(bot_event_signals.get("health_source", "unknown") or "unknown").strip().lower()
+                        if hp_src_raw in ("ws", "ocr", "heur", "fallback", "sim", "unknown"):
+                            hp_src_final = hp_src_raw
+                        elif hp_src_raw in ("vision", "event"):
+                            hp_src_final = "heur"
+                        elif "fallback" in hp_src_raw:
+                            hp_src_final = "fallback"
+                        else:
+                            hp_src_final = "unknown"
+                        final_phase = str(bot_event_signals.get("game_phase", "") or "").strip().lower()
+                        if str(run_stop_reason or "").strip().lower() == "death_event":
+                            final_phase = "dead"
+                        elif not final_phase:
+                            final_phase = str(run_stop_reason or "session_end").strip().lower()
+                        stamina_final_raw = bot_event_signals.get("mana_current", ability_state.get("mana", 0.0))
+                        try:
+                            stamina_final = float(stamina_final_raw or 0.0)
+                        except Exception:
+                            stamina_final = float(ability_state.get("mana", 0.0) or 0.0)
+                        if (not math.isfinite(stamina_final)) or stamina_final > 200.0:
+                            stamina_final = float(ability_state.get("mana", 0.0) or 0.0)
+                        stamina_final = max(0.0, min(100.0, stamina_final))
+                        final_frame = LiveTelemetryFrame(
+                            ts_ms=int(time.time() * 1000),
+                            run_id=str(telemetry_run_id or ""),
+                            match_id=str(telemetry_match_id or ""),
+                            hp_pct=hp_pct_final,
+                            hp_conf=0.72 if hp_pct_final is not None else 0.0,
+                            hp_src=hp_src_final,
+                            stamina_pct=stamina_final,
+                            stamina_conf=0.60,
+                            stamina_src="heur",
+                            dmg_in_total=float(bot_event_signals.get("damage_taken_total", 0.0) or 0.0),
+                            dmg_out_total=float(bot_event_signals.get("damage_done_total", 0.0) or 0.0),
+                            dmg_in_tick=0.0,
+                            dmg_out_tick=0.0,
+                            enemy_visible=enemy_visible_final,
+                            enemy_conf=max(0.0, min(1.0, enemy_conf_final)),
+                            enemy_xy=enemy_xy_final,
+                            enemy_dist_norm=enemy_signal_cache.get("distance"),
+                            enemy_age_ms=(
+                                max(0.0, (final_now_mono - float(enemy_signal_cache.get("last_ts", 0.0) or 0.0)) * 1000.0)
+                                if float(enemy_signal_cache.get("last_ts", 0.0) or 0.0) > 0.0
+                                else None
+                            ),
+                            ally_count=0,
+                            enemy_count=1 if enemy_visible_final else 0,
+                            zone_outside=bool(bot_event_signals.get("zone_outside_safe", False)),
+                            zone_toxic=bool(bot_event_signals.get("zone_toxic_detected", False)),
+                            zone_countdown_s=(
+                                None
+                                if float(bot_event_signals.get("zone_countdown_sec", -1.0) or -1.0) < 0.0
+                                else float(bot_event_signals.get("zone_countdown_sec", 0.0) or 0.0)
+                            ),
+                            decision=str(bot_event_signals.get("game_phase", run_stop_reason or "session_end") or "session_end"),
+                            action_last=f"session_end:{str(run_stop_reason or 'loop_exit')}",
+                            action_ok=True,
+                            game_phase=final_phase or str(run_stop_reason or "unknown"),
+                            phase_confidence=float(bot_event_signals.get("phase_confidence", 0.85 if final_phase == "dead" else 0.55) or 0.0),
+                            phase_reason=str(bot_event_signals.get("phase_reason", run_stop_reason or "session_end") or "session_end"),
+                            map_id=str(bot_event_signals.get("map_id", "") or ""),
+                            map_name=str(bot_event_signals.get("map_name", "") or ""),
+                            map_size_class=str(bot_event_signals.get("map_size_class", "") or ""),
+                            end_time_alive_sec=(
+                                None
+                                if bot_event_signals.get("match_end_time_alive_sec") is None
+                                else int(bot_event_signals.get("match_end_time_alive_sec"))
+                            ),
+                            end_eliminations=(
+                                None
+                                if bot_event_signals.get("match_end_eliminations") is None
+                                else int(bot_event_signals.get("match_end_eliminations"))
+                            ),
+                            end_objects_built=(
+                                None
+                                if bot_event_signals.get("match_end_objects_built") is None
+                                else int(bot_event_signals.get("match_end_objects_built"))
+                            ),
+                            motion_score=None,
+                            stuck=None,
+                            collision_proxy=None,
+                            entities=[],
+                        )
+                        final_emit_deadline = time.monotonic() + 1.0
+                        final_emitted = False
+                        while (not final_emitted) and time.monotonic() <= final_emit_deadline:
+                            final_emitted = bool(telemetry_writer.maybe_emit(final_frame))
+                            if not final_emitted:
+                                time.sleep(0.05)
+                    except Exception as exc:
+                        print(f"[BOT][TELEMETRY][WARN] no se pudo emitir frame final: {exc}")
                 if runtime_feedback_session:
                     append_feedback_event(
                         runtime_feedback_session,
@@ -12021,6 +13262,23 @@ def main() -> None:
                                 "cause_source": str(bot_event_signals.get("death_cause_source", "none") or "none"),
                                 "attacker_name": str(bot_event_signals.get("death_attacker_name", "") or ""),
                                 "attacker_is_bot": bot_event_signals.get("death_attacker_is_bot"),
+                            },
+                            "match_end": {
+                                "time_alive_sec": (
+                                    None
+                                    if bot_event_signals.get("match_end_time_alive_sec") is None
+                                    else int(bot_event_signals.get("match_end_time_alive_sec"))
+                                ),
+                                "eliminations": (
+                                    None
+                                    if bot_event_signals.get("match_end_eliminations") is None
+                                    else int(bot_event_signals.get("match_end_eliminations"))
+                                ),
+                                "objects_built": (
+                                    None
+                                    if bot_event_signals.get("match_end_objects_built") is None
+                                    else int(bot_event_signals.get("match_end_objects_built"))
+                                ),
                             },
                             "guardian": {
                                 "self": str(bot_event_signals.get("own_guardian", "") or ""),

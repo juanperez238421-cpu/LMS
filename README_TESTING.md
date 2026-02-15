@@ -95,6 +95,11 @@ Run recomendado para esta version (hasta muerte, backend RE de `Game`):
 powershell -ExecutionPolicy Bypass -File .\scripts\run_lms_bot_dual.ps1 --bot-decision-backend lms_re --bot-lmsre-mode-name royale_mode --bot-run-until-end --bot-run-stop-on-death-only --bot-run-max-sec 900 --report-every-sec 20
 ```
 
+Run full hasta muerte sin BOT HUD + telemetria al radar port:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_lms_bot_full_until_death_radar.ps1 -RadarPort 8008 -RunMaxSec 900
+```
+
 Ambos scripts ahora activan:
 - HUD visual en tiempo real (`--bot-debug-hud`)
 - Captura periodica de screenshots de feedback
